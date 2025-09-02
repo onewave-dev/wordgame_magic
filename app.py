@@ -351,6 +351,28 @@ async def users_shared_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     await reply_game_message(message, context, "Приглашения отправлены")
 
 
+async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    game = ACTIVE_GAMES.get(chat_id)
+    if not game:
+        await reply_game_message(update.message, context, "Игра не запущена")
+        return
+    user_id = update.effective_user.id
+    if user_id != game.host_id:
+        await reply_game_message(update.message, context, "Только инициатор может прервать игру")
+        return
+    for job in game.jobs.values():
+        job.schedule_removal()
+    game.jobs.clear()
+    if game.base_msg_id:
+        try:
+            await context.bot.delete_message(chat_id, game.base_msg_id)
+        except Exception:
+            pass
+    del ACTIVE_GAMES[chat_id]
+    await reply_game_message(update.message, context, "Игра прервана")
+
+
 async def base_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -697,6 +719,7 @@ async def on_startup() -> None:
     APPLICATION.add_handler(CommandHandler("start", start_cmd))
     APPLICATION.add_handler(CommandHandler("newgame", newgame))
     APPLICATION.add_handler(CommandHandler("join", join_cmd))
+    APPLICATION.add_handler(CommandHandler(["quit", "exit"], quit_cmd))
     APPLICATION.add_handler(MessageHandler(filters.REPLY & filters.TEXT & (~filters.COMMAND), handle_name))
     APPLICATION.add_handler(CallbackQueryHandler(time_selected, pattern="^(time_|adm_test)"))
     APPLICATION.add_handler(CallbackQueryHandler(join_button, pattern="^join$"))
