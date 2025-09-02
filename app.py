@@ -143,6 +143,24 @@ async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def maybe_show_base_options(chat_id: int, context: CallbackContext) -> None:
+    """Show base word options to the host when conditions are met."""
+    game = ACTIVE_GAMES.get(chat_id)
+    if not game or game.status != "waiting":
+        return
+    if len(game.players) >= 2 and all(p.name for p in game.players.values()):
+        await context.bot.send_message(
+            chat_id,
+            "Выберите базовое слово:",
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("Вручную", callback_data="base_manual"),
+                    InlineKeyboardButton("Случайное", callback_data="base_random"),
+                ]
+            ]),
+        )
+
+
 async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
@@ -153,6 +171,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if player and not player.name:
         player.name = update.message.text.strip()
         await update.message.reply_text(f"Имя установлено: {player.name}")
+        await maybe_show_base_options(chat_id, context)
 
 
 async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -206,17 +225,6 @@ async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     else:
         await update.message.reply_text("Вы уже в игре")
 
-    if len(game.players) >= 2 and game.status == "waiting" and user_id == game.host_id:
-        await update.message.reply_text(
-            "Выберите базовое слово:",
-            reply_markup=InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("Ввести", callback_data="base_manual"),
-                    InlineKeyboardButton("Случайное", callback_data="base_random"),
-                ]
-            ]),
-        )
-
 
 async def join_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -227,19 +235,16 @@ async def join_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     user_id = query.from_user.id
     if user_id not in game.players:
-        game.players[user_id] = Player(user_id=user_id)
-        await query.message.reply_text("Добро пожаловать! Введите ваше имя:", reply_markup=ForceReply(selective=True))
+        if len(game.players) < 5:
+            game.players[user_id] = Player(user_id=user_id)
+            await query.message.reply_text(
+                "Добро пожаловать! Введите ваше имя:",
+                reply_markup=ForceReply(selective=True),
+            )
+        else:
+            await query.message.reply_text("Лобби заполнено")
     else:
         await query.message.reply_text("Вы уже в игре")
-
-    if len(game.players) >= 2 and game.status == "waiting" and user_id == game.host_id:
-        await query.message.reply_text(
-            "Выберите базовое слово:",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("Ввести", callback_data="base_manual"),
-                 InlineKeyboardButton("Случайное", callback_data="base_random")]
-            ])
-        )
 
 
 async def invite_contacts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
