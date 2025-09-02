@@ -591,20 +591,41 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not player:
         return
     words = [normalize_word(w) for w in update.message.text.split()]
-    responses = []
     for w in words:
         if not is_cyrillic(w) or len(w) < 3:
+            await context.bot.send_message(
+                user_id,
+                f"Отклонено: {w} (принимаются слова из 3 букв и длиннее)",
+            )
+            continue
+        if w in player.words:
+            await context.bot.send_message(
+                user_id, f"Отклонено: {w} (вы уже использовали это слово)"
+            )
             continue
         if w in game.used_words:
+            await context.bot.send_message(
+                user_id, f"Отклонено: {w} (уже использовано другим игроком)"
+            )
             continue
         if not can_make(w, game.letters):
+            await context.bot.send_message(
+                user_id, f"Отклонено: {w} (нет таких букв)"
+            )
             continue
         if w not in DICT:
+            await context.bot.send_message(
+                user_id, f"Отклонено: {w} (такого слова нет в словаре)"
+            )
             continue
         game.used_words.add(w)
         player.words.append(w)
         pts = 2 if len(w) >= 6 else 1
         player.points += pts
+        message = f"Зачтено: {w}"
+        if len(w) >= 6:
+            message += "\nБраво! Вы получили 2 очка за это слово. 🤩"
+        await context.bot.send_message(user_id, message)
         if len(w) >= 6:
             name = player.name if player.name else update.effective_user.full_name
             length = len(w)
@@ -617,12 +638,6 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 f"Ход короля! 👑 {name} выкладывает слово из {length} букв.",
             ]
             await send_game_message(chat_id, context, random.choice(phrases))
-        responses.append(f"{w} (+{pts})")
-    if responses:
-        try:
-            await context.bot.send_message(user_id, "Зачтено: " + ", ".join(responses))
-        except Exception:
-            pass
     await refresh_base_button(chat_id, context)
 
 async def manual_base_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
