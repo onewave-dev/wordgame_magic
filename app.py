@@ -508,8 +508,18 @@ async def end_game(context: CallbackContext) -> None:
         game.base_msg_id = None
     scores = [(p.name or str(uid), p.points) for uid, p in game.players.items()]
     scores.sort(key=lambda x: x[1], reverse=True)
-    lines = [f"{name}: {pts}" for name, pts in scores]
-    await send_game_message(chat_id, context, "Игра окончена!\n" + "\n".join(lines))
+    score_lines = [f"{name}: {pts}" for name, pts in scores]
+    if scores:
+        max_score = scores[0][1]
+        winners = [name for name, pts in scores if pts == max_score]
+        if len(winners) == 1:
+            winner_line = f"Победитель: {winners[0]}"
+        else:
+            winner_line = "Победители: " + ", ".join(winners)
+        message = "Игра окончена!\n" + winner_line + "\n" + "\n".join(score_lines)
+    else:
+        message = "Игра окончена!"
+    await send_game_message(chat_id, context, message)
     await send_game_message(chat_id, context, "Новая игра с теми же участниками?", reply_markup=InlineKeyboardMarkup([
         [InlineKeyboardButton("Да", callback_data="restart_yes"), InlineKeyboardButton("Нет", callback_data="restart_no")]
     ]))
