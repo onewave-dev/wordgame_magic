@@ -277,6 +277,7 @@ async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await reply_game_message(update.message, context, "Лобби заполнено")
             return
         game.players[user_id] = Player(user_id=user_id)
+        context.user_data['join_chat'] = chat_id
         await reply_game_message(
             update.message,
             context,
@@ -298,6 +299,7 @@ async def join_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if user_id not in game.players:
         if len(game.players) < 5:
             game.players[user_id] = Player(user_id=user_id)
+            context.user_data['join_chat'] = chat_id
             await reply_game_message(
                 query.message,
                 context,
@@ -616,9 +618,15 @@ async def restart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = update.effective_chat.id
+    chat = update.effective_chat
+    chat_id = chat.id
     user_id = update.effective_user.id
     game = ACTIVE_GAMES.get(chat_id)
+    if not game and chat.type == "private":
+        join_chat = context.user_data.get("join_chat")
+        if join_chat:
+            game = ACTIVE_GAMES.get(join_chat)
+            chat_id = join_chat
     if not game or game.status != "running":
         return
     player = game.players.get(user_id)
@@ -632,12 +640,20 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         try:
             await context.bot.send_message(user_id, text)
         except TelegramError:
-            await reply_game_message(
-                update.message,
+            await send_game_message(
+                chat_id,
                 context,
                 f"{mention} {text}",
                 parse_mode="HTML",
             )
+            if not context.user_data.get("dm_warned"):
+                context.user_data["dm_warned"] = True
+                await send_game_message(
+                    chat_id,
+                    context,
+                    f"{mention} напишите мне в личные сообщения (/start), чтобы получать мгновенную обратную связь.",
+                    parse_mode="HTML",
+                )
 
     for w in words:
         if not is_cyrillic(w) or len(w) < 3:
