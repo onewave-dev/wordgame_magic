@@ -399,7 +399,9 @@ async def base_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if "count" in game.jobs:
             job = game.jobs.pop("count")
             job.schedule_removal()
-        await set_base_word(chat_id, word, context)
+        player = game.players.get(query.from_user.id)
+        chosen_by = player.name if player and player.name else query.from_user.full_name
+        await set_base_word(chat_id, word, context, chosen_by=chosen_by)
 
 
 async def finish_random(context: CallbackContext) -> None:
@@ -465,13 +467,18 @@ async def start_game(chat_id: int, context: CallbackContext) -> None:
     schedule_jobs(chat_id, context, game)
 
 
-async def set_base_word(chat_id: int, word: str, context: CallbackContext) -> None:
+async def set_base_word(chat_id: int, word: str, context: CallbackContext, chosen_by: Optional[str] = None) -> None:
     game = ACTIVE_GAMES.get(chat_id)
     if not game:
         return
     game.base_word = normalize_word(word)
     game.letters = Counter(game.base_word)
-    await send_game_message(chat_id, context, f"Выбрано слово: {game.base_word}")
+    message = (
+        f"{chosen_by} выбрал слово {game.base_word}"
+        if chosen_by
+        else f"Выбрано слово: {game.base_word}"
+    )
+    await send_game_message(chat_id, context, message)
     await send_game_message(
         chat_id,
         context,
@@ -575,7 +582,9 @@ async def manual_base_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if len(word) < 8 or word not in DICT:
         await reply_game_message(update.message, context, "Неверное слово")
         return
-    await set_base_word(chat_id, word, context)
+    player = game.players.get(user_id)
+    chosen_by = player.name if player and player.name else update.effective_user.full_name
+    await set_base_word(chat_id, word, context, chosen_by=chosen_by)
 
 
 async def bot_move(context: CallbackContext) -> None:
