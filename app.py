@@ -175,8 +175,9 @@ async def maybe_show_base_options(chat_id: int, context: CallbackContext) -> Non
     if not game or game.status != "waiting":
         return
     if len(game.players) >= 2 and all(p.name for p in game.players.values()):
-        await context.bot.send_message(
-            game.host_id,
+        await send_game_message(
+            chat_id,
+            context,
             "Выберите базовое слово:",
             reply_markup=InlineKeyboardMarkup(
                 [
@@ -374,8 +375,8 @@ async def base_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             candidates = [w for w in candidates if len(w) >= 9]
         words = random.sample(candidates, 3)
         buttons = [[InlineKeyboardButton(w, callback_data=f"pick_{w}")] for w in words]
-        await reply_game_message(
-            query.message,
+        await send_game_message(
+            chat_id,
             context,
             "Выберите слово:",
             reply_markup=InlineKeyboardMarkup(buttons),
@@ -595,7 +596,7 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         responses.append(f"{w} (+{pts})")
     if responses:
         await reply_game_message(update.message, context, "Зачтено: " + ", ".join(responses))
-
+    await refresh_base_button(chat_id, context)
 
 async def manual_base_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
