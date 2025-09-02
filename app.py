@@ -19,7 +19,7 @@ from telegram import (
     ForceReply,
     KeyboardButton,
     ReplyKeyboardMarkup,
-    KeyboardButtonRequestUser,
+    KeyboardButtonRequestUsers,
 )
 from telegram.ext import (Application, CallbackContext, CallbackQueryHandler,
                           CommandHandler, MessageHandler, ContextTypes,
@@ -247,7 +247,7 @@ async def invite_contacts(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await query.answer()
     button = KeyboardButton(
         text="Выбрать из контактов",
-        request_user=KeyboardButtonRequestUser(request_id=1),
+        request_users=KeyboardButtonRequestUsers(request_id=1),
     )
     await query.message.reply_text(
         "Выберите контакт:",
@@ -486,7 +486,7 @@ async def on_startup() -> None:
         APPLICATION.job_queue.run_repeating(webhook_check, 600, name="webhook_check")
     else:
         logger.warning("Job queue is disabled; periodic webhook check will not run")
-        
+
     if PUBLIC_URL:
         webhook_url = f"{PUBLIC_URL.rstrip('/')}{WEBHOOK_PATH}"
         info = await APPLICATION.bot.get_webhook_info()
