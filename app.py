@@ -79,6 +79,7 @@ class GameState:
     status: str = "config"  # config | waiting | running | finished
     jobs: Dict[str, any] = field(default_factory=dict)
     base_msg_id: Optional[int] = None
+    invited_users: Set[int] = field(default_factory=set)
 
 
 ACTIVE_GAMES: Dict[int, GameState] = {}
@@ -323,6 +324,29 @@ async def invite_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         context,
         f"Ссылка приглашения: https://t.me/{BOT_USERNAME}?start={code}",
     )
+
+
+async def users_shared_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.message
+    if not message or not message.users_shared:
+        return
+    shared = message.users_shared
+    chat_id = update.effective_chat.id
+    game = ACTIVE_GAMES.get(chat_id)
+    if not game:
+        return
+    code = next((c for c, cid in JOIN_CODES.items() if cid == chat_id), None)
+    if not code:
+        code = secrets.token_urlsafe(8)
+        JOIN_CODES[code] = chat_id
+    link = f"https://t.me/{BOT_USERNAME}?start={code}"
+    for u in shared.users:
+        try:
+            await context.bot.send_message(u.user_id, f"Приглашение в игру: {link}")
+            game.invited_users.add(u.user_id)
+        except Exception:
+            continue
+    await reply_game_message(message, context, "Приглашения отправлены")
 
 
 async def base_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -595,6 +619,7 @@ async def on_startup() -> None:
     APPLICATION.add_handler(CallbackQueryHandler(base_choice, pattern="^(base_|pick_)", block=False))
     APPLICATION.add_handler(CallbackQueryHandler(start_button, pattern="^start$"))
     APPLICATION.add_handler(CallbackQueryHandler(restart_handler, pattern="^restart_"))
+    APPLICATION.add_handler(MessageHandler(filters.StatusUpdate.USERS_SHARED, users_shared_handler))
     APPLICATION.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), manual_base_word))
     APPLICATION.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), word_message))
     await APPLICATION.initialize()
