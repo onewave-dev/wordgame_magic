@@ -262,6 +262,9 @@ async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     user_id = update.effective_user.id
     if user_id not in game.players:
+        if len(game.players) >= 5:
+            await reply_game_message(update.message, context, "Лобби заполнено")
+            return
         game.players[user_id] = Player(user_id=user_id)
         await reply_game_message(
             update.message,
