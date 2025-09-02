@@ -24,6 +24,7 @@ from telegram import (
 from telegram.ext import (Application, CallbackContext, CallbackQueryHandler,
                           CommandHandler, MessageHandler, ContextTypes,
                           filters)
+from telegram.error import TelegramError
 
 # --- Utilities --------------------------------------------------------------
 
@@ -84,6 +85,7 @@ class GameState:
 
 ACTIVE_GAMES: Dict[int, GameState] = {}
 JOIN_CODES: Dict[str, int] = {}
+LAST_REFRESH: Dict[int, float] = {}
 
 
 async def refresh_base_button(chat_id: int, context: CallbackContext) -> None:
@@ -107,15 +109,25 @@ async def refresh_base_button(chat_id: int, context: CallbackContext) -> None:
     game.base_msg_id = msg.message_id
 
 
+def schedule_refresh_base_button(chat_id: int, context: CallbackContext) -> None:
+    """Throttle refresh of the base word button to avoid blocking."""
+    now = asyncio.get_event_loop().time()
+    last = LAST_REFRESH.get(chat_id, 0)
+    if now - last < 1:
+        return
+    LAST_REFRESH[chat_id] = now
+    asyncio.create_task(refresh_base_button(chat_id, context))
+
+
 async def send_game_message(chat_id: int, context: CallbackContext, text: str, **kwargs):
     msg = await context.bot.send_message(chat_id, text, **kwargs)
-    await refresh_base_button(chat_id, context)
+    schedule_refresh_base_button(chat_id, context)
     return msg
 
 
 async def reply_game_message(message, context: CallbackContext, text: str, **kwargs):
     msg = await message.reply_text(text, **kwargs)
-    await refresh_base_button(message.chat_id, context)
+    schedule_refresh_base_button(message.chat_id, context)
     return msg
 
 
@@ -613,32 +625,37 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not player:
         return
     words = [normalize_word(w) for w in update.message.text.split()]
+    mention = update.effective_user.mention_html()
+    tasks: List = []
+
+    async def send_to_user(text: str) -> None:
+        try:
+            await context.bot.send_message(user_id, text)
+        except TelegramError:
+            await reply_game_message(
+                update.message,
+                context,
+                f"{mention} {text}",
+                parse_mode="HTML",
+            )
+
     for w in words:
         if not is_cyrillic(w) or len(w) < 3:
-            await context.bot.send_message(
-                user_id,
-                f"Отклонено: {w} (принимаются слова из 3 букв и длиннее)",
+            tasks.append(
+                send_to_user(f"Отклонено: {w} (принимаются слова из 3 букв и длиннее)")
             )
             continue
         if w in player.words:
-            await context.bot.send_message(
-                user_id, f"Отклонено: {w} (вы уже использовали это слово)"
-            )
+            tasks.append(send_to_user(f"Отклонено: {w} (вы уже использовали это слово)"))
             continue
         if w in game.used_words:
-            await context.bot.send_message(
-                user_id, f"Отклонено: {w} (уже использовано другим игроком)"
-            )
-            continue
-        if not can_make(w, game.letters):
-            await context.bot.send_message(
-                user_id, f"Отклонено: {w} (нет таких букв)"
-            )
+            tasks.append(send_to_user(f"Отклонено: {w} (уже использовано другим игроком)"))
             continue
         if w not in DICT:
-            await context.bot.send_message(
-                user_id, f"Отклонено: {w} (такого слова нет в словаре)"
-            )
+            tasks.append(send_to_user(f"Отклонено: {w} (такого слова нет в словаре)"))
+            continue
+        if not can_make(w, game.letters):
+            tasks.append(send_to_user(f"Отклонено: {w} (нет таких букв)"))
             continue
         game.used_words.add(w)
         player.words.append(w)
@@ -647,7 +664,7 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         message = f"Зачтено: {w}"
         if len(w) >= 6:
             message += "\nБраво! Вы получили 2 очка за это слово. 🤩"
-        await context.bot.send_message(user_id, message)
+        tasks.append(send_to_user(message))
         if len(w) >= 6:
             name = player.name if player.name else update.effective_user.full_name
             length = len(w)
@@ -659,8 +676,11 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 f"😎 Лови стиль: {name} выкатывает слово на {length} букв.",
                 f"Ход короля! 👑 {name} выкладывает слово из {length} букв.",
             ]
-            await send_game_message(chat_id, context, random.choice(phrases))
-    await refresh_base_button(chat_id, context)
+            tasks.append(send_game_message(chat_id, context, random.choice(phrases)))
+
+    if tasks:
+        await asyncio.gather(*tasks)
+    schedule_refresh_base_button(chat_id, context)
 
 async def manual_base_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
