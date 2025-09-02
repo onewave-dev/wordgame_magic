@@ -278,7 +278,11 @@ async def base_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await query.answer()
     chat_id = query.message.chat.id
     game = ACTIVE_GAMES.get(chat_id)
-    if not game or query.from_user.id != game.host_id:
+    if not game:
+        return
+
+    # Only the host may request random/manual base word options
+    if query.data in {"base_manual", "base_random"} and query.from_user.id != game.host_id:
         return
 
     if query.data == "base_manual":
@@ -295,12 +299,27 @@ async def base_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             "Выберите слово:",
             reply_markup=InlineKeyboardMarkup(buttons),
         )
-        context.job_queue.run_once(finish_random, 5, chat_id=chat_id, data=words, name=f"rand_{chat_id}")
+        game.jobs["rand"] = context.job_queue.run_once(
+            finish_random, 5, chat_id=chat_id, data=words, name=f"rand_{chat_id}"
+        )
+        game.jobs["count"] = context.job_queue.run_repeating(
+            countdown,
+            1,
+            count=5,
+            chat_id=chat_id,
+            data={"remaining": 5},
+            name=f"cnt_{chat_id}",
+        )
 
     elif query.data.startswith("pick_"):
+        if game.base_word:
+            return
         word = query.data.split("_", 1)[1]
         if "rand" in game.jobs:
             job = game.jobs.pop("rand")
+            job.schedule_removal()
+        if "count" in game.jobs:
+            job = game.jobs.pop("count")
             job.schedule_removal()
         await set_base_word(chat_id, word, context)
 
@@ -310,8 +329,35 @@ async def finish_random(context: CallbackContext) -> None:
     game = ACTIVE_GAMES.get(chat_id)
     if not game or game.base_word:
         return
+    if "count" in game.jobs:
+        job = game.jobs.pop("count")
+        job.schedule_removal()
+    game.jobs.pop("rand", None)
     word = random.choice(context.job.data)
     await set_base_word(chat_id, word, context)
+
+
+async def countdown(context: CallbackContext) -> None:
+    """Send or edit a message with countdown numbers."""
+    chat_id = context.job.chat_id
+    data = context.job.data
+    remaining = data.get("remaining", 0)
+    if remaining <= 0:
+        return
+
+    msg_id = data.get("message_id")
+    try:
+        if msg_id:
+            await context.bot.edit_message_text(str(remaining), chat_id, msg_id)
+        else:
+            msg = await context.bot.send_message(chat_id, str(remaining))
+            data["message_id"] = msg.message_id
+    except Exception:
+        # If editing fails (message deleted), send a new one
+        msg = await context.bot.send_message(chat_id, str(remaining))
+        data["message_id"] = msg.message_id
+
+    data["remaining"] = remaining - 1
 
 
 def schedule_jobs(chat_id: int, context: CallbackContext, game: GameState) -> None:
