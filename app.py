@@ -10,8 +10,16 @@ from typing import Dict, Optional, Set, List
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
-from telegram import (BotCommand, InlineKeyboardButton, InlineKeyboardMarkup,
-                      Update, ForceReply)
+from telegram import (
+    BotCommand,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Update,
+    ForceReply,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+    KeyboardButtonRequestUser,
+)
 from telegram.ext import (Application, CallbackContext, CallbackQueryHandler,
                           CommandHandler, MessageHandler, ContextTypes,
                           filters)
@@ -157,11 +165,17 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         game.status = "waiting"
         code = secrets.token_urlsafe(8)
         JOIN_CODES[code] = chat_id
-        await query.edit_message_text(
-            f"Игра создана. Присоединяйтесь: /join или ссылка https://t.me/{BOT_USERNAME}?start={code}")
+        await query.edit_message_text("Игра создана. Пригласите участников.")
+        buttons = [
+            [
+                InlineKeyboardButton("Пригласить из контактов", callback_data="invite_contacts"),
+                InlineKeyboardButton("Создать ссылку", callback_data="invite_link"),
+            ],
+            [InlineKeyboardButton("Присоединиться", callback_data="join")],
+        ]
         await query.message.reply_text(
-            "Нажмите 'Присоединиться' чтобы вступить в игру",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Присоединиться", callback_data="join")]])
+            "Выберите действие:",
+            reply_markup=InlineKeyboardMarkup(buttons),
         )
     elif query.data == "adm_test" and query.from_user.id == ADMIN_ID:
         game.time_limit = 3
@@ -173,6 +187,33 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await query.edit_message_text("Тестовая игра началась")
         await start_game(chat_id, context)
         context.job_queue.run_repeating(bot_move, 30, chat_id=chat_id, name=f"bot_{chat_id}")
+
+
+async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    game = ACTIVE_GAMES.get(chat_id)
+    if not game:
+        return
+    user_id = update.effective_user.id
+    if user_id not in game.players:
+        game.players[user_id] = Player(user_id=user_id)
+        await update.message.reply_text(
+            "Добро пожаловать! Введите ваше имя:",
+            reply_markup=ForceReply(selective=True),
+        )
+    else:
+        await update.message.reply_text("Вы уже в игре")
+
+    if len(game.players) >= 2 and game.status == "waiting" and user_id == game.host_id:
+        await update.message.reply_text(
+            "Выберите базовое слово:",
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("Ввести", callback_data="base_manual"),
+                    InlineKeyboardButton("Случайное", callback_data="base_random"),
+                ]
+            ]),
+        )
 
 
 async def join_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -197,6 +238,32 @@ async def join_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                  InlineKeyboardButton("Случайное", callback_data="base_random")]
             ])
         )
+
+
+async def invite_contacts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    button = KeyboardButton(
+        text="Выбрать из контактов",
+        request_user=KeyboardButtonRequestUser(request_id=1),
+    )
+    await query.message.reply_text(
+        "Выберите контакт:",
+        reply_markup=ReplyKeyboardMarkup([[button]], one_time_keyboard=True, resize_keyboard=True),
+    )
+
+
+async def invite_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    chat_id = query.message.chat.id
+    code = next((c for c, cid in JOIN_CODES.items() if cid == chat_id), None)
+    if not code:
+        code = secrets.token_urlsafe(8)
+        JOIN_CODES[code] = chat_id
+    await query.message.reply_text(
+        f"Ссылка приглашения: https://t.me/{BOT_USERNAME}?start={code}"
+    )
 
 
 async def base_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -402,9 +469,12 @@ async def on_startup() -> None:
     BOT_USERNAME = (await APPLICATION.bot.get_me()).username
     APPLICATION.add_handler(CommandHandler("start", start_cmd))
     APPLICATION.add_handler(CommandHandler("newgame", newgame))
+    APPLICATION.add_handler(CommandHandler("join", join_cmd))
     APPLICATION.add_handler(MessageHandler(filters.REPLY & filters.TEXT & (~filters.COMMAND), handle_name))
     APPLICATION.add_handler(CallbackQueryHandler(time_selected, pattern="^(time_|adm_test)"))
     APPLICATION.add_handler(CallbackQueryHandler(join_button, pattern="^join$"))
+    APPLICATION.add_handler(CallbackQueryHandler(invite_contacts, pattern="^invite_contacts$"))
+    APPLICATION.add_handler(CallbackQueryHandler(invite_link, pattern="^invite_link$"))
     APPLICATION.add_handler(CallbackQueryHandler(base_choice, pattern="^(base_|pick_)", block=False))
     APPLICATION.add_handler(CallbackQueryHandler(start_button, pattern="^start$"))
     APPLICATION.add_handler(CallbackQueryHandler(restart_handler, pattern="^restart_"))
