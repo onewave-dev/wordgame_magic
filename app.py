@@ -91,7 +91,7 @@ async def refresh_base_button(chat_id: int, context: CallbackContext) -> None:
     game = ACTIVE_GAMES.get(chat_id)
     if not game or game.status != "running" or not game.base_word:
         return
-    text = "Собирайте слова из букв базового слова:" if not game.base_msg_id else "\u2060"
+    text = "Собирайте слова из букв базового слова:"
     if game.base_msg_id:
         try:
             await context.bot.delete_message(chat_id, game.base_msg_id)
