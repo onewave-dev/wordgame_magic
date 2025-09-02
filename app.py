@@ -524,6 +524,12 @@ async def set_webhook() -> JSONResponse:
     return JSONResponse({"url": webhook_url})
 
 
+@app.get("/")
+async def root() -> JSONResponse:
+    """Base endpoint with brief service info."""
+    return JSONResponse({"message": "Wordgame Magic service. See /healthz for status."})
+
+
 @app.get("/healthz")
 async def healthz() -> JSONResponse:
     return JSONResponse({"status": "ok"})
