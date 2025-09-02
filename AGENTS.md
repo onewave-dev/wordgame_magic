@@ -260,4 +260,5 @@ uvicorn[standard]>=0.30
 - `PUBLIC_URL` — публичный HTTPS-URL (например, `https://<имя>.onrender.com`)  
 - `WEBHOOK_SECRET` — длинная случайная строка 
 - `WEBHOOK_PATH` — (опц.) путь вебхука, по умолчанию `/webhook`
+- `WORD_CONFIRM_IN_CHAT` — (опц.) `1` чтобы дублировать подтверждение слова в групповой чат
 

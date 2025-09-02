@@ -142,6 +142,7 @@ TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 PUBLIC_URL = os.environ.get("PUBLIC_URL")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", secrets.token_hex())
 WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "/webhook")
+WORD_CONFIRM_IN_CHAT = os.environ.get("WORD_CONFIRM_IN_CHAT") == "1"
 
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -682,6 +683,14 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     chat_id,
                     context,
                     f"{mention} напишите мне в личные сообщения (/start), чтобы получать мгновенную обратную связь.",
+                    parse_mode="HTML",
+                )
+        else:
+            if WORD_CONFIRM_IN_CHAT:
+                await send_game_message(
+                    chat_id,
+                    context,
+                    f"{mention} {text}",
                     parse_mode="HTML",
                 )
 
