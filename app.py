@@ -167,20 +167,6 @@ async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     await request_name(user_id, chat_id, context)
 
-    buttons = [
-        [InlineKeyboardButton("3 минуты", callback_data="time_3"),
-         InlineKeyboardButton("5 минут", callback_data="time_5")]
-    ]
-    if user_id == ADMIN_ID:
-        buttons.append([InlineKeyboardButton("[адм.] Тест", callback_data="adm_test")])
-
-    await reply_game_message(
-        update.message,
-        context,
-        "Выберите длительность игры:",
-        reply_markup=InlineKeyboardMarkup(buttons),
-    )
-
 
 async def maybe_show_base_options(chat_id: int, context: CallbackContext) -> None:
     """Send base word options to the host when conditions are met."""
@@ -212,6 +198,21 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if player and not player.name:
         player.name = update.message.text.strip()
         await reply_game_message(update.message, context, f"Имя установлено: {player.name}")
+        if user_id == game.host_id and game.status == "config":
+            buttons = [
+                [
+                    InlineKeyboardButton("3 минуты", callback_data="time_3"),
+                    InlineKeyboardButton("5 минут", callback_data="time_5"),
+                ]
+            ]
+            if user_id == ADMIN_ID:
+                buttons.append([InlineKeyboardButton("[адм.] Тест", callback_data="adm_test")])
+            await reply_game_message(
+                update.message,
+                context,
+                "Выберите длительность игры:",
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
         await maybe_show_base_options(chat_id, context)
 
 
