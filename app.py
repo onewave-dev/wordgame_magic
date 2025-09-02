@@ -225,11 +225,13 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         player = Player(user_id=user_id, name=name)
         game.players[user_id] = player
         context.user_data["join_chat"] = chat_id
+        context.user_data["name"] = name
         await reply_game_message(update.message, context, f"Имя установлено: {player.name}")
         await maybe_show_base_options(chat_id, context)
         return
     if not player.name:
         player.name = name
+        context.user_data["name"] = name
         await reply_game_message(update.message, context, f"Имя установлено: {player.name}")
         if user_id == game.host_id and game.status == "config":
             buttons = [
@@ -649,7 +651,17 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     player = game.players.get(user_id)
     if not player:
-        return
+        saved_name = context.user_data.get("name")
+        if saved_name and len(game.players) < 5:
+            player = Player(user_id=user_id, name=saved_name)
+            game.players[user_id] = player
+            context.user_data["join_chat"] = chat_id
+            await send_game_message(chat_id, context, f"{saved_name} присоединился к игре")
+        else:
+            await reply_game_message(
+                update.message, context, "Чтобы участвовать, используйте /join"
+            )
+            return
     words = [normalize_word(w) for w in update.message.text.split()]
     mention = update.effective_user.mention_html()
     tasks: List = []
