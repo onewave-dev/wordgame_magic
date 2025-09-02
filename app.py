@@ -183,21 +183,22 @@ async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def maybe_show_base_options(chat_id: int, context: CallbackContext) -> None:
-    """Show base word options to the host when conditions are met."""
+    """Send base word options to the host when conditions are met."""
     game = ACTIVE_GAMES.get(chat_id)
     if not game or game.status != "waiting":
         return
     if len(game.players) >= 2 and all(p.name for p in game.players.values()):
-        await send_game_message(
-            chat_id,
-            context,
+        await context.bot.send_message(
+            game.host_id,
             "Выберите базовое слово:",
-            reply_markup=InlineKeyboardMarkup([
+            reply_markup=InlineKeyboardMarkup(
                 [
-                    InlineKeyboardButton("Вручную", callback_data="base_manual"),
-                    InlineKeyboardButton("Случайное", callback_data="base_random"),
+                    [
+                        InlineKeyboardButton("Вручную", callback_data="base_manual"),
+                        InlineKeyboardButton("Случайное", callback_data="base_random"),
+                    ]
                 ]
-            ]),
+            ),
         )
 
 
@@ -502,11 +503,9 @@ async def restart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
     if query.data == "restart_yes":
         reset_game(game)
-        await query.edit_message_text("Игра перезапущена. Выберите длительность:")
-        buttons = [[InlineKeyboardButton("3 минуты", callback_data="time_3"), InlineKeyboardButton("5 минут", callback_data="time_5")]]
-        if game.host_id == ADMIN_ID:
-            buttons.append([InlineKeyboardButton("[адм.] Тест", callback_data="adm_test")])
-        await reply_game_message(query.message, context, "Выберите длительность игры:", reply_markup=InlineKeyboardMarkup(buttons))
+        game.status = "waiting"
+        await query.edit_message_text("Игра перезапущена.")
+        await maybe_show_base_options(chat_id, context)
     else:
         del ACTIVE_GAMES[chat_id]
         await query.edit_message_text("Игра завершена. Для новой игры с новыми участниками нажмите /start")
