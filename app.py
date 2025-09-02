@@ -619,7 +619,10 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await send_game_message(chat_id, context, random.choice(phrases))
         responses.append(f"{w} (+{pts})")
     if responses:
-        await reply_game_message(update.message, context, "Зачтено: " + ", ".join(responses))
+        try:
+            await context.bot.send_message(user_id, "Зачтено: " + ", ".join(responses))
+        except Exception:
+            pass
     await refresh_base_button(chat_id, context)
 
 async def manual_base_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
