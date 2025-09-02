@@ -608,8 +608,18 @@ async def bot_move(context: CallbackContext) -> None:
 
 async def webhook_check(context: CallbackContext) -> None:
     info = await context.bot.get_webhook_info()
-    if not info.url:
-        print("Webhook missing")
+    expected_url = f"{PUBLIC_URL.rstrip('/')}{WEBHOOK_PATH}" if PUBLIC_URL else None
+    if not info.url or info.url != expected_url:
+        if expected_url:
+            try:
+                await context.bot.set_webhook(url=expected_url, secret_token=WEBHOOK_SECRET)
+                logger.info("Webhook registered: %s", expected_url)
+            except Exception as e:
+                logger.error("Webhook registration failed: %s", e)
+        else:
+            logger.warning("PUBLIC_URL not set; cannot register webhook")
+    else:
+        logger.info("Webhook is up-to-date: %s", info.url)
 
 
 @app.on_event("startup")
