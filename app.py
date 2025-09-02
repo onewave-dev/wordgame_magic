@@ -509,19 +509,29 @@ async def end_game(context: CallbackContext) -> None:
         except Exception:
             pass
         game.base_msg_id = None
+    players_sorted = sorted(game.players.values(), key=lambda p: p.points, reverse=True)
     scores = [(p.name or str(uid), p.points) for uid, p in game.players.items()]
     scores.sort(key=lambda x: x[1], reverse=True)
-    score_lines = [f"{name}: {pts}" for name, pts in scores]
-    if scores:
-        max_score = scores[0][1]
-        winners = [name for name, pts in scores if pts == max_score]
+    max_score = scores[0][1] if scores else 0
+    winners = [name for name, pts in scores if pts == max_score]
+
+    lines = ["Игра окончена! Результаты:", "", f"Слово: {game.base_word.upper()}", ""]
+    for p in players_sorted:
+        name = p.name or str(p.user_id)
+        lines.append(name)
+        for i, w in enumerate(p.words, 1):
+            pts = 2 if len(w) >= 6 else 1
+            lines.append(f"{i}. {w} — {pts}")
+        lines.append(f"Результат: {p.points}")
+        lines.append("")
+
+    if winners:
         if len(winners) == 1:
-            winner_line = f"Победитель: {winners[0]}"
+            lines.append(f"🏆 Победитель: {winners[0]}")
         else:
-            winner_line = "Победители: " + ", ".join(winners)
-        message = "Игра окончена!\n" + winner_line + "\n" + "\n".join(score_lines)
-    else:
-        message = "Игра окончена!"
+            lines.append("🏆 Победители: " + ", ".join(winners))
+
+    message = "\n".join(lines).rstrip()
     await send_game_message(chat_id, context, message)
     await send_game_message(chat_id, context, "Новая игра с теми же участниками?", reply_markup=InlineKeyboardMarkup([
         [InlineKeyboardButton("Да", callback_data="restart_yes"), InlineKeyboardButton("Нет", callback_data="restart_no")]
