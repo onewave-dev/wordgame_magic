@@ -538,9 +538,21 @@ async def restart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
     if query.data == "restart_yes":
         reset_game(game)
-        game.status = "waiting"
         await query.edit_message_text("Игра перезапущена.")
-        await maybe_show_base_options(chat_id, context)
+        buttons = [
+            [
+                InlineKeyboardButton("3 минуты", callback_data="time_3"),
+                InlineKeyboardButton("5 минут", callback_data="time_5"),
+            ]
+        ]
+        if query.from_user.id == ADMIN_ID:
+            buttons.append([InlineKeyboardButton("[адм.] Тест", callback_data="adm_test")])
+        await reply_game_message(
+            query.message,
+            context,
+            "Выберите длительность игры:",
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
     else:
         del ACTIVE_GAMES[chat_id]
         await query.edit_message_text("Игра завершена. Для новой игры с новыми участниками нажмите /start")
