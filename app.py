@@ -205,14 +205,31 @@ async def maybe_show_base_options(chat_id: int, context: CallbackContext) -> Non
 
 
 async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = update.effective_chat.id
+    chat = update.effective_chat
+    chat_id = chat.id
     user_id = update.effective_user.id
     game = ACTIVE_GAMES.get(chat_id)
+    if not game and chat.type == "private":
+        join_chat = context.user_data.get("join_chat")
+        if join_chat:
+            game = ACTIVE_GAMES.get(join_chat)
+            chat_id = join_chat
     if not game:
         return
     player = game.players.get(user_id)
-    if player and not player.name:
-        player.name = update.message.text.strip()
+    name = update.message.text.strip()
+    if not player:
+        if len(game.players) >= 5:
+            await reply_game_message(update.message, context, "Лобби заполнено")
+            return
+        player = Player(user_id=user_id, name=name)
+        game.players[user_id] = player
+        context.user_data["join_chat"] = chat_id
+        await reply_game_message(update.message, context, f"Имя установлено: {player.name}")
+        await maybe_show_base_options(chat_id, context)
+        return
+    if not player.name:
+        player.name = name
         await reply_game_message(update.message, context, f"Имя установлено: {player.name}")
         if user_id == game.host_id and game.status == "config":
             buttons = [
