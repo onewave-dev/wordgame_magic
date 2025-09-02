@@ -688,7 +688,7 @@ async def on_startup() -> None:
     APPLICATION.add_handler(CallbackQueryHandler(start_button, pattern="^start$"))
     APPLICATION.add_handler(CallbackQueryHandler(restart_handler, pattern="^restart_"))
     APPLICATION.add_handler(MessageHandler(filters.StatusUpdate.USERS_SHARED, users_shared_handler))
-    APPLICATION.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), manual_base_word))
+    APPLICATION.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), manual_base_word, block=False))
     APPLICATION.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), word_message))
     await APPLICATION.initialize()
     await APPLICATION.start()
