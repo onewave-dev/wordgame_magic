@@ -487,6 +487,8 @@ async def on_startup() -> None:
     APPLICATION.add_handler(CallbackQueryHandler(restart_handler, pattern="^restart_"))
     APPLICATION.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), manual_base_word))
     APPLICATION.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), word_message))
+    await APPLICATION.initialize()
+    await APPLICATION.start()
     if APPLICATION.job_queue:
         APPLICATION.job_queue.run_repeating(webhook_check, 600, name="webhook_check")
     else:
@@ -497,6 +499,12 @@ async def on_startup() -> None:
         info = await APPLICATION.bot.get_webhook_info()
         if info.url != webhook_url:
             await APPLICATION.bot.set_webhook(url=webhook_url, secret_token=WEBHOOK_SECRET)
+
+
+@app.on_event("shutdown")
+async def on_shutdown() -> None:
+    await APPLICATION.stop()
+    await APPLICATION.shutdown()
 
 
 @app.post(WEBHOOK_PATH)
