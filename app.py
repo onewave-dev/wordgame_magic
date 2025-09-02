@@ -91,6 +91,7 @@ async def refresh_base_button(chat_id: int, context: CallbackContext) -> None:
     game = ACTIVE_GAMES.get(chat_id)
     if not game or game.status != "running" or not game.base_word:
         return
+    text = "Собирайте слова из букв базового слова:" if not game.base_msg_id else "\u2060"
     if game.base_msg_id:
         try:
             await context.bot.delete_message(chat_id, game.base_msg_id)
@@ -98,7 +99,7 @@ async def refresh_base_button(chat_id: int, context: CallbackContext) -> None:
             pass
     msg = await context.bot.send_message(
         chat_id,
-        "\u2060",
+        text,
         reply_markup=InlineKeyboardMarkup(
             [[InlineKeyboardButton(game.base_word.upper(), callback_data="noop")]]
         ),
@@ -246,14 +247,11 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
     elif query.data == "adm_test" and query.from_user.id == ADMIN_ID:
         game.time_limit = 3
-        game.status = "running"
-        game.base_word = random.choice([w for w in DICT if len(w) >= 8])
-        game.letters = Counter(game.base_word)
         bot_player = Player(user_id=0, name="Bot")
         game.players[0] = bot_player
-        await query.edit_message_text("Тестовая игра началась")
-        await start_game(chat_id, context)
-        context.job_queue.run_repeating(bot_move, 30, chat_id=chat_id, name=f"bot_{chat_id}")
+        game.status = "waiting"
+        await query.edit_message_text("Тестовая игра создана")
+        await maybe_show_base_options(chat_id, context)
 
 
 async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -469,6 +467,10 @@ async def start_game(chat_id: int, context: CallbackContext) -> None:
     game.status = "running"
     await send_game_message(chat_id, context, f"Исходное слово: {game.base_word.upper()}")
     schedule_jobs(chat_id, context, game)
+    if 0 in game.players:
+        game.jobs["bot"] = context.job_queue.run_repeating(
+            bot_move, 30, chat_id=chat_id, name=f"bot_{chat_id}"
+        )
 
 
 async def set_base_word(chat_id: int, word: str, context: CallbackContext, chosen_by: Optional[str] = None) -> None:
