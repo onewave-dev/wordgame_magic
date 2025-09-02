@@ -25,6 +25,7 @@ from telegram.ext import (Application, CallbackContext, CallbackQueryHandler,
                           CommandHandler, MessageHandler, ContextTypes,
                           filters)
 from telegram.error import TelegramError
+from telegram.constants import ChatMemberStatus
 
 # --- Utilities --------------------------------------------------------------
 
@@ -182,6 +183,16 @@ async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data["join_chat"] = chat_id
 
     await request_name(user_id, chat_id, context)
+
+    try:
+        member = await context.bot.get_chat_member(chat_id, context.bot.id)
+        if member.status != ChatMemberStatus.ADMINISTRATOR:
+            await context.bot.send_message(
+                user_id,
+                "Чтобы бот видел слова игроков, отключите режим приватности у @BotFather или повысьте бота до администратора в этом чате",
+            )
+    except TelegramError:
+        pass
 
 
 async def maybe_show_base_options(chat_id: int, context: CallbackContext) -> None:
