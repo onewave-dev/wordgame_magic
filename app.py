@@ -31,6 +31,8 @@ from telegram.constants import ChatMemberStatus
 
 DICT_PATH = Path(__file__).with_name("nouns_ru_pymorphy2_yaspeller.jsonl")
 
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(level=LOG_LEVEL)
 logger = logging.getLogger(__name__)
 
 def normalize_word(word: str) -> str:
@@ -660,6 +662,7 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             game = ACTIVE_GAMES.get(join_chat)
             chat_id = join_chat
     if not game or game.status != "running":
+        logger.debug("game not running or not found")
         return
     player = game.players.get(user_id)
     if not player:
@@ -673,6 +676,7 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await reply_game_message(
                 update.message, context, "Чтобы участвовать, используйте /join"
             )
+            logger.debug("player not registered")
             return
     words = [normalize_word(w) for w in update.message.text.split()]
     mention = update.effective_user.mention_html()
