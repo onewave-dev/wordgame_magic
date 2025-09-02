@@ -3,6 +3,7 @@ import json
 import os
 import random
 import secrets
+import logging
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,6 +29,7 @@ from telegram.ext import (Application, CallbackContext, CallbackQueryHandler,
 
 DICT_PATH = Path(__file__).with_name("nouns_ru_pymorphy2_yaspeller.jsonl")
 
+logger = logging.getLogger(__name__)
 
 def normalize_word(word: str) -> str:
     """Normalize words: lowercase and replace ё with е."""
@@ -480,8 +482,11 @@ async def on_startup() -> None:
     APPLICATION.add_handler(CallbackQueryHandler(restart_handler, pattern="^restart_"))
     APPLICATION.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), manual_base_word))
     APPLICATION.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), word_message))
-    APPLICATION.job_queue.run_repeating(webhook_check, 600, name="webhook_check")
-
+    if APPLICATION.job_queue:
+        APPLICATION.job_queue.run_repeating(webhook_check, 600, name="webhook_check")
+    else:
+        logger.warning("Job queue is disabled; periodic webhook check will not run")
+        
     if PUBLIC_URL:
         webhook_url = f"{PUBLIC_URL.rstrip('/')}{WEBHOOK_PATH}"
         info = await APPLICATION.bot.get_webhook_info()
