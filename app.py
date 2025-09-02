@@ -593,6 +593,18 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         player.words.append(w)
         pts = 2 if len(w) >= 6 else 1
         player.points += pts
+        if len(w) >= 6:
+            name = player.name if player.name else update.effective_user.full_name
+            length = len(w)
+            phrases = [
+                f"🔥 {name} жжёт! Прилетело слово из {length} букв.",
+                f"{name} выдает красоту ✨: слово из {length} букв!",
+                f"🥊 {name} в ударе! Словечко на {length} букв.",
+                f"💣 Да это ж бомба! Слово из {length} букв от игрока {name}.",
+                f"😎 Лови стиль: {name} выкатывает слово на {length} букв.",
+                f"Ход короля! 👑 {name} выкладывает слово из {length} букв.",
+            ]
+            await send_game_message(chat_id, context, random.choice(phrases))
         responses.append(f"{w} (+{pts})")
     if responses:
         await reply_game_message(update.message, context, "Зачтено: " + ", ".join(responses))
