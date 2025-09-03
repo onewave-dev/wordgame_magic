@@ -150,6 +150,28 @@ WORD_CONFIRM_IN_CHAT = os.environ.get("WORD_CONFIRM_IN_CHAT") == "1"
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     code = context.args[0] if context.args else None
+    if code == "home":
+        new_code = secrets.token_urlsafe(8)
+        JOIN_CODES[new_code] = 0
+        link = f"https://t.me/{BOT_USERNAME}?startgroup=create_{new_code}"
+        await reply_game_message(
+            update.message,
+            context,
+            "Создайте новый чат для игры",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("Создать игру", url=link)]]
+            ),
+        )
+        return
+    if code and code.startswith("create_"):
+        key = code.split("create_", 1)[1]
+        JOIN_CODES[key] = update.effective_chat.id
+        await reply_game_message(
+            update.message,
+            context,
+            "Группа создана. Используйте /newgame для старта.",
+        )
+        return
     if code and code in JOIN_CODES:
         context.user_data["join_chat"] = JOIN_CODES[code]
         await reply_game_message(
