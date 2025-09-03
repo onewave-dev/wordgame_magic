@@ -524,8 +524,22 @@ async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await context.bot.delete_message(chat_id, game.base_msg_id)
         except Exception:
             pass
-    del ACTIVE_GAMES[(chat_id, thread_id)]
     await reply_game_message(update.message, context, "Игра прервана")
+    try:
+        await context.bot.close_forum_topic(chat_id, thread_id)
+    except TelegramError:
+        pass
+    ACTIVE_GAMES.pop((chat_id, thread_id), None)
+    game_id = context.application.chat_data.get(chat_id, {}).pop(thread_id, None)
+    summary = (
+        f"Игра #{game_id} прервана и тема закрыта."
+        if game_id
+        else "Игра прервана и тема закрыта."
+    )
+    try:
+        await context.bot.send_message(chat_id, summary)
+    except TelegramError:
+        pass
 
 
 async def base_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -738,18 +752,26 @@ async def end_game(context: CallbackContext) -> None:
             lines.append(f"🏆 Победитель: {winners[0]}")
         else:
             lines.append("🏆 Победители: " + ", ".join(winners))
-
     message = "\n".join(lines).rstrip()
     await send_game_message(chat_id, thread_id, context, message)
-    await send_game_message(
-        chat_id,
-        thread_id,
-        context,
-        "Новая игра с теми же участниками?",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("Да", callback_data="restart_yes"), InlineKeyboardButton("Нет", callback_data="restart_no")]
-        ]),
+    try:
+        await context.bot.close_forum_topic(chat_id, thread_id)
+    except TelegramError:
+        pass
+    for job in game.jobs.values():
+        job.schedule_removal()
+    game.jobs.clear()
+    ACTIVE_GAMES.pop((chat_id, thread_id), None)
+    game_id = context.application.chat_data.get(chat_id, {}).pop(thread_id, None)
+    summary = (
+        f"Игра #{game_id} завершена, тема закрыта."
+        if game_id
+        else "Игра завершена, тема закрыта."
     )
+    try:
+        await context.bot.send_message(chat_id, summary)
+    except TelegramError:
+        pass
 
 
 def reset_game(game: GameState) -> None:
