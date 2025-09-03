@@ -165,12 +165,35 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     if code and code.startswith("create_"):
         key = code.split("create_", 1)[1]
-        JOIN_CODES[key] = update.effective_chat.id
-        await reply_game_message(
-            update.message,
-            context,
-            "Группа создана. Используйте /newgame для старта.",
-        )
+        chat = update.effective_chat
+        user_id = update.effective_user.id
+        if chat.type in {"group", "supergroup"} and key in JOIN_CODES:
+            JOIN_CODES.pop(key, None)
+            game = ACTIVE_GAMES.get(chat.id)
+            if game and game.status in {"waiting", "running"}:
+                await reply_game_message(update.message, context, "Игра уже запущена.")
+                return
+            game = GameState(host_id=user_id)
+            ACTIVE_GAMES[chat.id] = game
+            game.players[user_id] = Player(user_id=user_id)
+            context.user_data["join_chat"] = chat.id
+            await request_name(user_id, chat.id, context)
+            try:
+                member = await context.bot.get_chat_member(chat.id, context.bot.id)
+                if member.status != ChatMemberStatus.ADMINISTRATOR:
+                    await context.bot.send_message(
+                        user_id,
+                        "Чтобы бот видел слова игроков, отключите режим приватности у @BotFather или повысьте бота до администратора в этом чате",
+                    )
+            except TelegramError:
+                pass
+        else:
+            JOIN_CODES[key] = chat.id
+            await reply_game_message(
+                update.message,
+                context,
+                "Группа создана. Используйте /newgame для старта.",
+            )
         return
     if code and code in JOIN_CODES:
         context.user_data["join_chat"] = JOIN_CODES[code]
