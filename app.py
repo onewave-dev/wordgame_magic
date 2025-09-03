@@ -466,7 +466,14 @@ async def users_shared_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             continue
     await reply_game_message(message, context, "Приглашения отправлены")
 
-
+async def chat_id_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    await update.message.reply_text(
+        f"ℹ️ Chat ID: `{chat.id}`\n"
+        f"Название: {chat.title if chat.title else '—'}\n"
+        f"Тип: {chat.type}"
+    )
+    
 async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     game = ACTIVE_GAMES.get(chat_id)
@@ -879,6 +886,7 @@ async def on_startup() -> None:
     APPLICATION.add_handler(CommandHandler("newgame", newgame))
     APPLICATION.add_handler(CommandHandler("join", join_cmd))
     APPLICATION.add_handler(CommandHandler(["quit", "exit"], quit_cmd))
+    APPLICATION.add_handler(CommandHandler("chatid", chat_id_handler))
     APPLICATION.add_handler(MessageHandler(filters.REPLY & filters.TEXT & (~filters.COMMAND), handle_name))
     APPLICATION.add_handler(CallbackQueryHandler(time_selected, pattern="^(time_|adm_test)"))
     APPLICATION.add_handler(CallbackQueryHandler(join_button, pattern="^join$"))
@@ -890,6 +898,8 @@ async def on_startup() -> None:
     APPLICATION.add_handler(MessageHandler(filters.StatusUpdate.USERS_SHARED, users_shared_handler))
     APPLICATION.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), manual_base_word, block=False))
     APPLICATION.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), word_message))
+    
+    
     await APPLICATION.initialize()
     await APPLICATION.start()
     if APPLICATION.job_queue:
