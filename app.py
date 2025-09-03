@@ -7,7 +7,8 @@ import logging
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional, Set, List
+from datetime import datetime
+from typing import Dict, Optional, Set, List, Tuple
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
@@ -84,16 +85,17 @@ class GameState:
     jobs: Dict[str, any] = field(default_factory=dict)
     base_msg_id: Optional[int] = None
     invited_users: Set[int] = field(default_factory=set)
+    thread_id: int = 0
 
 
-ACTIVE_GAMES: Dict[int, GameState] = {}
-JOIN_CODES: Dict[str, int] = {}
-LAST_REFRESH: Dict[int, float] = {}
+ACTIVE_GAMES: Dict[Tuple[int, int], GameState] = {}
+JOIN_CODES: Dict[str, Tuple[int, int]] = {}
+LAST_REFRESH: Dict[Tuple[int, int], float] = {}
 
 
-async def refresh_base_button(chat_id: int, context: CallbackContext) -> None:
+async def refresh_base_button(chat_id: int, thread_id: int, context: CallbackContext) -> None:
     """Resend base word button to keep it the last message."""
-    game = ACTIVE_GAMES.get(chat_id)
+    game = ACTIVE_GAMES.get((chat_id, thread_id))
     if not game or game.status != "running" or not game.base_word:
         return
     text = "Собирайте слова из букв базового слова:"
@@ -108,29 +110,34 @@ async def refresh_base_button(chat_id: int, context: CallbackContext) -> None:
         reply_markup=InlineKeyboardMarkup(
             [[InlineKeyboardButton(game.base_word.upper(), callback_data="noop")]]
         ),
+        message_thread_id=thread_id,
     )
     game.base_msg_id = msg.message_id
 
 
-def schedule_refresh_base_button(chat_id: int, context: CallbackContext) -> None:
+def schedule_refresh_base_button(chat_id: int, thread_id: int, context: CallbackContext) -> None:
     """Throttle refresh of the base word button to avoid blocking."""
     now = asyncio.get_event_loop().time()
-    last = LAST_REFRESH.get(chat_id, 0)
+    key = (chat_id, thread_id)
+    last = LAST_REFRESH.get(key, 0)
     if now - last < 1:
         return
-    LAST_REFRESH[chat_id] = now
-    asyncio.create_task(refresh_base_button(chat_id, context))
+    LAST_REFRESH[key] = now
+    asyncio.create_task(refresh_base_button(chat_id, thread_id, context))
 
 
-async def send_game_message(chat_id: int, context: CallbackContext, text: str, **kwargs):
-    msg = await context.bot.send_message(chat_id, text, **kwargs)
-    schedule_refresh_base_button(chat_id, context)
+async def send_game_message(chat_id: int, thread_id: Optional[int], context: CallbackContext, text: str, **kwargs):
+    if thread_id is None:
+        msg = await context.bot.send_message(chat_id, text, **kwargs)
+    else:
+        msg = await context.bot.send_message(chat_id, text, message_thread_id=thread_id, **kwargs)
+    schedule_refresh_base_button(chat_id, thread_id or 0, context)
     return msg
 
 
 async def reply_game_message(message, context: CallbackContext, text: str, **kwargs):
     msg = await message.reply_text(text, **kwargs)
-    schedule_refresh_base_button(message.chat_id, context)
+    schedule_refresh_base_button(message.chat_id, message.message_thread_id or 0, context)
     return msg
 
 
@@ -146,13 +153,14 @@ PUBLIC_URL = os.environ.get("PUBLIC_URL")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", secrets.token_hex())
 WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "/webhook")
 WORD_CONFIRM_IN_CHAT = os.environ.get("WORD_CONFIRM_IN_CHAT") == "1"
+SUPERGROUP_ID = int(os.getenv("SUPERGROUP_ID", "0"))
 
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     code = context.args[0] if context.args else None
     if code == "home":
         new_code = secrets.token_urlsafe(8)
-        JOIN_CODES[new_code] = 0
+        JOIN_CODES[new_code] = (0, 0)
         link = f"https://t.me/{BOT_USERNAME}?startgroup=create_{new_code}"
         await reply_game_message(
             update.message,
@@ -169,14 +177,15 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user_id = update.effective_user.id
         if chat.type in {"group", "supergroup"} and key in JOIN_CODES:
             JOIN_CODES.pop(key, None)
-            game = ACTIVE_GAMES.get(chat.id)
+            game = ACTIVE_GAMES.get((chat.id, 0))
             if game and game.status in {"waiting", "running"}:
                 await reply_game_message(update.message, context, "Игра уже запущена.")
                 return
-            game = GameState(host_id=user_id)
-            ACTIVE_GAMES[chat.id] = game
+            game = GameState(host_id=user_id, thread_id=0)
+            ACTIVE_GAMES[(chat.id, 0)] = game
             game.players[user_id] = Player(user_id=user_id)
             context.user_data["join_chat"] = chat.id
+            context.user_data["join_thread"] = 0
             await request_name(user_id, chat.id, context)
             try:
                 member = await context.bot.get_chat_member(chat.id, context.bot.id)
@@ -188,7 +197,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             except TelegramError:
                 pass
         else:
-            JOIN_CODES[key] = chat.id
+            JOIN_CODES[key] = (chat.id, 0)
             await reply_game_message(
                 update.message,
                 context,
@@ -196,7 +205,9 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
         return
     if code and code in JOIN_CODES:
-        context.user_data["join_chat"] = JOIN_CODES[code]
+        jc, jt = JOIN_CODES[code]
+        context.user_data["join_chat"] = jc
+        context.user_data["join_thread"] = jt
         await reply_game_message(
             update.message,
             context,
@@ -232,47 +243,57 @@ async def clear_home_link_message(update: Update, context: ContextTypes.DEFAULT_
 async def request_name(user_id: int, chat_id: int, context: CallbackContext) -> None:
     await send_game_message(
         chat_id,
+        None,
         context,
         "Введите ваше имя",
         reply_markup=ForceReply(selective=True),
     )
 
 
+async def create_game(host_id: int, context: CallbackContext) -> int:
+    game_id = int(datetime.utcnow().timestamp())
+    topic = await context.bot.create_forum_topic(
+        chat_id=SUPERGROUP_ID,
+        name=f"Игра #{game_id} • 10 минут",
+    )
+    thread_id = topic.message_thread_id
+    invite = await context.bot.create_chat_invite_link(SUPERGROUP_ID)
+    topic_url = f"https://t.me/c/{str(SUPERGROUP_ID)[4:]}/{thread_id}"
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("Пригласить игроков", url=invite.invite_link),
+                InlineKeyboardButton("Зайти в комнату", url=topic_url),
+            ]
+        ]
+    )
+    await context.bot.send_message(
+        SUPERGROUP_ID,
+        f"Игра #{game_id} создана",
+        message_thread_id=thread_id,
+        reply_markup=keyboard,
+    )
+    context.application.chat_data.setdefault(SUPERGROUP_ID, {})[thread_id] = game_id
+    game = GameState(host_id=host_id, thread_id=thread_id)
+    ACTIVE_GAMES[(SUPERGROUP_ID, thread_id)] = game
+    return game_id
+
+
 async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = update.effective_chat.id
-    user_id = update.effective_user.id
-
-    game = ACTIVE_GAMES.get(chat_id)
-    if game and game.status in {"waiting", "running"}:
-        await reply_game_message(update.message, context, "Игра уже запущена.")
-        return
-
-    game = GameState(host_id=user_id)
-    ACTIVE_GAMES[chat_id] = game
-    game.players[user_id] = Player(user_id=user_id)
-    context.user_data["join_chat"] = chat_id
-
-    await request_name(user_id, chat_id, context)
-
-    try:
-        member = await context.bot.get_chat_member(chat_id, context.bot.id)
-        if member.status != ChatMemberStatus.ADMINISTRATOR:
-            await context.bot.send_message(
-                user_id,
-                "Чтобы бот видел слова игроков, отключите режим приватности у @BotFather или повысьте бота до администратора в этом чате",
-            )
-    except TelegramError:
-        pass
+    game_id = await create_game(update.effective_user.id, context)
+    if update.message:
+        await reply_game_message(update.message, context, f"Игра #{game_id} создана")
 
 
-async def maybe_show_base_options(chat_id: int, context: CallbackContext) -> None:
+async def maybe_show_base_options(chat_id: int, thread_id: int, context: CallbackContext) -> None:
     """Send base word options to the host when conditions are met."""
-    game = ACTIVE_GAMES.get(chat_id)
+    game = ACTIVE_GAMES.get((chat_id, thread_id))
     if not game or game.status != "waiting":
         return
     if len(game.players) >= 2 and all(p.name for p in game.players.values()):
         await send_game_message(
             chat_id,
+            thread_id,
             context,
             "Выберите базовое слово:",
             reply_markup=InlineKeyboardMarkup(
@@ -290,12 +311,14 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     chat = update.effective_chat
     chat_id = chat.id
     user_id = update.effective_user.id
-    game = ACTIVE_GAMES.get(chat_id)
+    thread_id = update.effective_message.message_thread_id
+    game = ACTIVE_GAMES.get((chat_id, thread_id))
     if not game and chat.type == "private":
         join_chat = context.user_data.get("join_chat")
-        if join_chat:
-            game = ACTIVE_GAMES.get(join_chat)
-            chat_id = join_chat
+        join_thread = context.user_data.get("join_thread")
+        if join_chat is not None and join_thread is not None:
+            game = ACTIVE_GAMES.get((join_chat, join_thread))
+            chat_id, thread_id = join_chat, join_thread
     if not game:
         return
     player = game.players.get(user_id)
@@ -307,9 +330,10 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         player = Player(user_id=user_id, name=name)
         game.players[user_id] = player
         context.user_data["join_chat"] = chat_id
+        context.user_data["join_thread"] = thread_id
         context.user_data["name"] = name
         await reply_game_message(update.message, context, f"Имя установлено: {player.name}")
-        await maybe_show_base_options(chat_id, context)
+        await maybe_show_base_options(chat_id, thread_id, context)
         return
     if not player.name:
         player.name = name
@@ -330,21 +354,22 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 "Выберите длительность игры:",
                 reply_markup=InlineKeyboardMarkup(buttons),
             )
-        await maybe_show_base_options(chat_id, context)
+        await maybe_show_base_options(chat_id, thread_id, context)
 
 
 async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
     chat_id = query.message.chat.id
-    game = ACTIVE_GAMES.get(chat_id)
+    thread_id = query.message.message_thread_id
+    game = ACTIVE_GAMES.get((chat_id, thread_id))
     if not game or query.from_user.id != game.host_id:
         return
     if query.data.startswith("time_"):
         game.time_limit = int(query.data.split("_")[1])
         game.status = "waiting"
         code = secrets.token_urlsafe(8)
-        JOIN_CODES[code] = chat_id
+        JOIN_CODES[code] = (chat_id, thread_id)
         await query.edit_message_text("Игра создана. Пригласите участников.")
         buttons = [
             [
@@ -365,12 +390,13 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         game.players[0] = bot_player
         game.status = "waiting"
         await query.edit_message_text("Тестовая игра создана")
-        await maybe_show_base_options(chat_id, context)
+        await maybe_show_base_options(chat_id, thread_id, context)
 
 
 async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
-    game = ACTIVE_GAMES.get(chat_id)
+    thread_id = update.effective_message.message_thread_id
+    game = ACTIVE_GAMES.get((chat_id, thread_id))
     if not game:
         return
     user_id = update.effective_user.id
@@ -380,6 +406,7 @@ async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
         game.players[user_id] = Player(user_id=user_id)
         context.user_data['join_chat'] = chat_id
+        context.user_data['join_thread'] = thread_id
         await reply_game_message(
             update.message,
             context,
@@ -394,7 +421,8 @@ async def join_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     query = update.callback_query
     await query.answer()
     chat_id = query.message.chat.id
-    game = ACTIVE_GAMES.get(chat_id)
+    thread_id = query.message.message_thread_id
+    game = ACTIVE_GAMES.get((chat_id, thread_id))
     if not game:
         return
     user_id = query.from_user.id
@@ -402,6 +430,7 @@ async def join_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if len(game.players) < 5:
             game.players[user_id] = Player(user_id=user_id)
             context.user_data['join_chat'] = chat_id
+            context.user_data['join_thread'] = thread_id
             await reply_game_message(
                 query.message,
                 context,
@@ -433,10 +462,11 @@ async def invite_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     query = update.callback_query
     await query.answer()
     chat_id = query.message.chat.id
-    code = next((c for c, cid in JOIN_CODES.items() if cid == chat_id), None)
+    thread_id = query.message.message_thread_id
+    code = next((c for c, ids in JOIN_CODES.items() if ids == (chat_id, thread_id)), None)
     if not code:
         code = secrets.token_urlsafe(8)
-        JOIN_CODES[code] = chat_id
+        JOIN_CODES[code] = (chat_id, thread_id)
     await reply_game_message(
         query.message,
         context,
@@ -450,13 +480,14 @@ async def users_shared_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     shared = message.users_shared
     chat_id = update.effective_chat.id
-    game = ACTIVE_GAMES.get(chat_id)
+    thread_id = update.effective_message.message_thread_id
+    game = ACTIVE_GAMES.get((chat_id, thread_id))
     if not game:
         return
-    code = next((c for c, cid in JOIN_CODES.items() if cid == chat_id), None)
+    code = next((c for c, ids in JOIN_CODES.items() if ids == (chat_id, thread_id)), None)
     if not code:
         code = secrets.token_urlsafe(8)
-        JOIN_CODES[code] = chat_id
+        JOIN_CODES[code] = (chat_id, thread_id)
     link = f"https://t.me/{BOT_USERNAME}?start={code}"
     for u in shared.users:
         try:
@@ -476,7 +507,8 @@ async def chat_id_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
 async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
-    game = ACTIVE_GAMES.get(chat_id)
+    thread_id = update.effective_message.message_thread_id
+    game = ACTIVE_GAMES.get((chat_id, thread_id))
     if not game:
         await reply_game_message(update.message, context, "Игра не запущена")
         return
@@ -492,7 +524,7 @@ async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await context.bot.delete_message(chat_id, game.base_msg_id)
         except Exception:
             pass
-    del ACTIVE_GAMES[chat_id]
+    del ACTIVE_GAMES[(chat_id, thread_id)]
     await reply_game_message(update.message, context, "Игра прервана")
 
 
@@ -500,7 +532,8 @@ async def base_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     query = update.callback_query
     await query.answer()
     chat_id = query.message.chat.id
-    game = ACTIVE_GAMES.get(chat_id)
+    thread_id = query.message.message_thread_id
+    game = ACTIVE_GAMES.get((chat_id, thread_id))
     if not game:
         return
 
@@ -520,20 +553,25 @@ async def base_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         buttons = [[InlineKeyboardButton(w, callback_data=f"pick_{w}")] for w in words]
         await send_game_message(
             chat_id,
+            thread_id,
             context,
             "Выберите слово:",
             reply_markup=InlineKeyboardMarkup(buttons),
         )
         game.jobs["rand"] = context.job_queue.run_once(
-            finish_random, 5, chat_id=chat_id, data=words, name=f"rand_{chat_id}"
+            finish_random,
+            5,
+            chat_id=chat_id,
+            data={"thread_id": thread_id, "words": words},
+            name=f"rand_{chat_id}_{thread_id}",
         )
         game.jobs["count"] = context.job_queue.run_repeating(
             countdown,
             1,
             count=5,
             chat_id=chat_id,
-            data={"remaining": 5},
-            name=f"cnt_{chat_id}",
+            data={"thread_id": thread_id, "remaining": 5},
+            name=f"cnt_{chat_id}_{thread_id}",
         )
 
     elif query.data.startswith("pick_"):
@@ -548,26 +586,29 @@ async def base_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             job.schedule_removal()
         player = game.players.get(query.from_user.id)
         chosen_by = player.name if player and player.name else query.from_user.full_name
-        await set_base_word(chat_id, word, context, chosen_by=chosen_by)
+        await set_base_word(chat_id, thread_id, word, context, chosen_by=chosen_by)
 
 
 async def finish_random(context: CallbackContext) -> None:
     chat_id = context.job.chat_id
-    game = ACTIVE_GAMES.get(chat_id)
+    data = context.job.data or {}
+    thread_id = data.get("thread_id")
+    game = ACTIVE_GAMES.get((chat_id, thread_id))
     if not game or game.base_word:
         return
     if "count" in game.jobs:
         job = game.jobs.pop("count")
         job.schedule_removal()
     game.jobs.pop("rand", None)
-    word = random.choice(context.job.data)
-    await set_base_word(chat_id, word, context)
+    word = random.choice(data.get("words", []))
+    await set_base_word(chat_id, thread_id, word, context)
 
 
 async def countdown(context: CallbackContext) -> None:
     """Send or edit a message with countdown numbers."""
     chat_id = context.job.chat_id
     data = context.job.data
+    thread_id = data.get("thread_id")
     remaining = data.get("remaining", 0)
     if remaining <= 0:
         return
@@ -575,21 +616,33 @@ async def countdown(context: CallbackContext) -> None:
     msg_id = data.get("message_id")
     try:
         if msg_id:
-            await context.bot.edit_message_text(str(remaining), chat_id, msg_id)
+            await context.bot.edit_message_text(str(remaining), chat_id, msg_id, message_thread_id=thread_id)
         else:
-            msg = await send_game_message(chat_id, context, str(remaining))
+            msg = await send_game_message(chat_id, thread_id, context, str(remaining))
             data["message_id"] = msg.message_id
     except Exception:
         # If editing fails (message deleted), send a new one
-        msg = await send_game_message(chat_id, context, str(remaining))
+        msg = await send_game_message(chat_id, thread_id, context, str(remaining))
         data["message_id"] = msg.message_id
 
     data["remaining"] = remaining - 1
 
 
-def schedule_jobs(chat_id: int, context: CallbackContext, game: GameState) -> None:
-    warn = context.job_queue.run_once(warn_time, (game.time_limit - 1) * 60, chat_id=chat_id, name=f"warn_{chat_id}")
-    end = context.job_queue.run_once(end_game, game.time_limit * 60, chat_id=chat_id, name=f"end_{chat_id}")
+def schedule_jobs(chat_id: int, thread_id: int, context: CallbackContext, game: GameState) -> None:
+    warn = context.job_queue.run_once(
+        warn_time,
+        (game.time_limit - 1) * 60,
+        chat_id=chat_id,
+        data={"thread_id": thread_id},
+        name=f"warn_{chat_id}_{thread_id}",
+    )
+    end = context.job_queue.run_once(
+        end_game,
+        game.time_limit * 60,
+        chat_id=chat_id,
+        data={"thread_id": thread_id},
+        name=f"end_{chat_id}_{thread_id}",
+    )
     game.jobs["warn"] = warn
     game.jobs["end"] = end
 
@@ -598,28 +651,33 @@ async def start_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     query = update.callback_query
     await query.answer()
     chat_id = query.message.chat.id
-    game = ACTIVE_GAMES.get(chat_id)
+    thread_id = query.message.message_thread_id
+    game = ACTIVE_GAMES.get((chat_id, thread_id))
     if not game or query.from_user.id != game.host_id or not game.base_word:
         return
     await query.edit_message_text("Игра начинается!")
-    await start_game(chat_id, context)
+    await start_game(chat_id, thread_id, context)
 
 
-async def start_game(chat_id: int, context: CallbackContext) -> None:
-    game = ACTIVE_GAMES.get(chat_id)
+async def start_game(chat_id: int, thread_id: int, context: CallbackContext) -> None:
+    game = ACTIVE_GAMES.get((chat_id, thread_id))
     if not game:
         return
     game.status = "running"
-    await send_game_message(chat_id, context, f"Исходное слово: {game.base_word.upper()}")
-    schedule_jobs(chat_id, context, game)
+    await send_game_message(chat_id, thread_id, context, f"Исходное слово: {game.base_word.upper()}")
+    schedule_jobs(chat_id, thread_id, context, game)
     if 0 in game.players:
         game.jobs["bot"] = context.job_queue.run_repeating(
-            bot_move, 30, chat_id=chat_id, name=f"bot_{chat_id}"
+            bot_move,
+            30,
+            chat_id=chat_id,
+            data={"thread_id": thread_id},
+            name=f"bot_{chat_id}_{thread_id}",
         )
 
 
-async def set_base_word(chat_id: int, word: str, context: CallbackContext, chosen_by: Optional[str] = None) -> None:
-    game = ACTIVE_GAMES.get(chat_id)
+async def set_base_word(chat_id: int, thread_id: int, word: str, context: CallbackContext, chosen_by: Optional[str] = None) -> None:
+    game = ACTIVE_GAMES.get((chat_id, thread_id))
     if not game:
         return
     game.base_word = normalize_word(word)
@@ -629,9 +687,10 @@ async def set_base_word(chat_id: int, word: str, context: CallbackContext, chose
         if chosen_by
         else f"Выбрано слово: {game.base_word}"
     )
-    await send_game_message(chat_id, context, message)
+    await send_game_message(chat_id, thread_id, context, message)
     await send_game_message(
         chat_id,
+        thread_id,
         context,
         "Нажмите Старт, когда будете готовы",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Старт", callback_data="start")]]),
@@ -639,12 +698,16 @@ async def set_base_word(chat_id: int, word: str, context: CallbackContext, chose
 
 
 async def warn_time(context: CallbackContext) -> None:
-    await send_game_message(context.job.chat_id, context, "Осталась 1 минута!")
+    data = context.job.data or {}
+    thread_id = data.get("thread_id")
+    await send_game_message(context.job.chat_id, thread_id, context, "Осталась 1 минута!")
 
 
 async def end_game(context: CallbackContext) -> None:
     chat_id = context.job.chat_id
-    game = ACTIVE_GAMES.get(chat_id)
+    data = context.job.data or {}
+    thread_id = data.get("thread_id")
+    game = ACTIVE_GAMES.get((chat_id, thread_id))
     if not game:
         return
     game.status = "finished"
@@ -677,10 +740,16 @@ async def end_game(context: CallbackContext) -> None:
             lines.append("🏆 Победители: " + ", ".join(winners))
 
     message = "\n".join(lines).rstrip()
-    await send_game_message(chat_id, context, message)
-    await send_game_message(chat_id, context, "Новая игра с теми же участниками?", reply_markup=InlineKeyboardMarkup([
-        [InlineKeyboardButton("Да", callback_data="restart_yes"), InlineKeyboardButton("Нет", callback_data="restart_no")]
-    ]))
+    await send_game_message(chat_id, thread_id, context, message)
+    await send_game_message(
+        chat_id,
+        thread_id,
+        context,
+        "Новая игра с теми же участниками?",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("Да", callback_data="restart_yes"), InlineKeyboardButton("Нет", callback_data="restart_no")]
+        ]),
+    )
 
 
 def reset_game(game: GameState) -> None:
@@ -701,7 +770,8 @@ async def restart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     query = update.callback_query
     await query.answer()
     chat_id = query.message.chat.id
-    game = ACTIVE_GAMES.get(chat_id)
+    thread_id = query.message.message_thread_id
+    game = ACTIVE_GAMES.get((chat_id, thread_id))
     if not game:
         return
     if query.data == "restart_yes":
@@ -722,20 +792,22 @@ async def restart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             reply_markup=InlineKeyboardMarkup(buttons),
         )
     else:
-        del ACTIVE_GAMES[chat_id]
+        del ACTIVE_GAMES[(chat_id, thread_id)]
         await query.edit_message_text("Игра завершена. Для новой игры с новыми участниками нажмите /start")
 
 
 async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat = update.effective_chat
     chat_id = chat.id
+    thread_id = update.effective_message.message_thread_id
     user_id = update.effective_user.id
-    game = ACTIVE_GAMES.get(chat_id)
+    game = ACTIVE_GAMES.get((chat_id, thread_id))
     if not game and chat.type == "private":
         join_chat = context.user_data.get("join_chat")
-        if join_chat:
-            game = ACTIVE_GAMES.get(join_chat)
-            chat_id = join_chat
+        join_thread = context.user_data.get("join_thread")
+        if join_chat is not None and join_thread is not None:
+            game = ACTIVE_GAMES.get((join_chat, join_thread))
+            chat_id, thread_id = join_chat, join_thread
     if not game or game.status != "running":
         logger.debug("game not running or not found")
         return
@@ -746,7 +818,8 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             player = Player(user_id=user_id, name=saved_name)
             game.players[user_id] = player
             context.user_data["join_chat"] = chat_id
-            await send_game_message(chat_id, context, f"{saved_name} присоединился к игре")
+            context.user_data["join_thread"] = thread_id
+            await send_game_message(chat_id, thread_id, context, f"{saved_name} присоединился к игре")
         else:
             await reply_game_message(
                 update.message, context, "Чтобы участвовать, используйте /join"
@@ -763,6 +836,7 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         except TelegramError:
             await send_game_message(
                 chat_id,
+                thread_id,
                 context,
                 f"{mention} {text}",
                 parse_mode="HTML",
@@ -771,6 +845,7 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 context.user_data["dm_warned"] = True
                 await send_game_message(
                     chat_id,
+                    thread_id,
                     context,
                     f"{mention} напишите мне в личные сообщения (/start), чтобы получать мгновенную обратную связь.",
                     parse_mode="HTML",
@@ -779,6 +854,7 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             if WORD_CONFIRM_IN_CHAT:
                 await send_game_message(
                     chat_id,
+                    thread_id,
                     context,
                     f"{mention} {text}",
                     parse_mode="HTML",
@@ -786,9 +862,7 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     for w in words:
         if not is_cyrillic(w) or len(w) < 3:
-            tasks.append(
-                send_to_user(f"Отклонено: {w} (принимаются слова из 3 букв и длиннее)")
-            )
+            tasks.append(send_to_user(f"Отклонено: {w} (принимаются слова из 3 букв и длиннее)"))
             continue
         if w in player.words:
             tasks.append(send_to_user(f"Отклонено: {w} (вы уже использовали это слово)"))
@@ -821,16 +895,17 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 f"😎 Лови стиль: {name} выкатывает слово на {length} букв.",
                 f"Ход короля! 👑 {name} выкладывает слово из {length} букв.",
             ]
-            tasks.append(send_game_message(chat_id, context, random.choice(phrases)))
+            tasks.append(send_game_message(chat_id, thread_id, context, random.choice(phrases)))
 
     if tasks:
         await asyncio.gather(*tasks)
-    schedule_refresh_base_button(chat_id, context)
+    schedule_refresh_base_button(chat_id, thread_id, context)
 
 async def manual_base_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
+    thread_id = update.effective_message.message_thread_id
     user_id = update.effective_user.id
-    game = ACTIVE_GAMES.get(chat_id)
+    game = ACTIVE_GAMES.get((chat_id, thread_id))
     if not game or user_id != game.host_id or game.base_word:
         return
     word = normalize_word(update.message.text)
@@ -839,26 +914,27 @@ async def manual_base_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     player = game.players.get(user_id)
     chosen_by = player.name if player and player.name else update.effective_user.full_name
-    await set_base_word(chat_id, word, context, chosen_by=chosen_by)
+    await set_base_word(chat_id, thread_id, word, context, chosen_by=chosen_by)
 
 
 async def bot_move(context: CallbackContext) -> None:
     chat_id = context.job.chat_id
-    game = ACTIVE_GAMES.get(chat_id)
+    data = context.job.data or {}
+    thread_id = data.get("thread_id")
+    game = ACTIVE_GAMES.get((chat_id, thread_id))
     if not game or game.status != "running":
         return
     available = [w for w in DICT if len(w) >= 3 and can_make(w, game.letters) and w not in game.used_words]
     if not available:
         return
     word = random.choice(available)
-    update = Update(update_id=0, message=None)
     bot_player = game.players.get(0)
     if bot_player:
         bot_player.words.append(word)
         pts = 2 if len(word) >= 6 else 1
         bot_player.points += pts
         game.used_words.add(word)
-        await send_game_message(chat_id, context, f"Bot: {word}")
+        await send_game_message(chat_id, thread_id, context, f"Bot: {word}")
 
 
 async def webhook_check(context: CallbackContext) -> None:
