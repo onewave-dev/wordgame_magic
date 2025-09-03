@@ -159,16 +159,26 @@ SUPERGROUP_ID = int(os.getenv("SUPERGROUP_ID", "0"))
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     code = context.args[0] if context.args else None
     if code == "home":
-        new_code = secrets.token_urlsafe(8)
-        JOIN_CODES[new_code] = (0, 0)
-        link = f"https://t.me/{BOT_USERNAME}?startgroup=create_{new_code}"
+        user = update.effective_user
+        game_id, thread_id = await create_game(user.id, context)
+        context.user_data["join_chat"] = SUPERGROUP_ID
+        context.user_data["join_thread"] = thread_id
+        game = ACTIVE_GAMES.get((SUPERGROUP_ID, thread_id))
+        if game:
+            game.players[user.id] = Player(user_id=user.id, name=user.first_name or "")
+        buttons = [
+            [
+                InlineKeyboardButton("3 минуты", callback_data="time_3"),
+                InlineKeyboardButton("5 минут", callback_data="time_5"),
+            ]
+        ]
+        if user.id == ADMIN_ID:
+            buttons.append([InlineKeyboardButton("[адм.] Тестовая игра", callback_data="adm_test")])
         await reply_game_message(
             update.message,
             context,
-            "Создайте новый чат для игры",
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("Создать игру", url=link)]]
-            ),
+            f"Игра #{game_id} создана. Выберите длительность:",
+            reply_markup=InlineKeyboardMarkup(buttons),
         )
         return
     if code and code.startswith("create_"):
@@ -250,7 +260,7 @@ async def request_name(user_id: int, chat_id: int, context: CallbackContext) -> 
     )
 
 
-async def create_game(host_id: int, context: CallbackContext) -> int:
+async def create_game(host_id: int, context: CallbackContext) -> Tuple[int, int]:
     game_id = int(datetime.utcnow().timestamp())
     topic = await context.bot.create_forum_topic(
         chat_id=SUPERGROUP_ID,
@@ -276,11 +286,11 @@ async def create_game(host_id: int, context: CallbackContext) -> int:
     context.application.chat_data.setdefault(SUPERGROUP_ID, {})[thread_id] = game_id
     game = GameState(host_id=host_id, thread_id=thread_id)
     ACTIVE_GAMES[(SUPERGROUP_ID, thread_id)] = game
-    return game_id
+    return game_id, thread_id
 
 
 async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    game_id = await create_game(update.effective_user.id, context)
+    game_id, _ = await create_game(update.effective_user.id, context)
     if update.message:
         await reply_game_message(update.message, context, f"Игра #{game_id} создана")
 
@@ -347,7 +357,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 ]
             ]
             if user_id == ADMIN_ID:
-                buttons.append([InlineKeyboardButton("[адм.] Тест", callback_data="adm_test")])
+                buttons.append([InlineKeyboardButton("[адм.] Тестовая игра", callback_data="adm_test")])
             await reply_game_message(
                 update.message,
                 context,
@@ -363,6 +373,12 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     chat_id = query.message.chat.id
     thread_id = query.message.message_thread_id
     game = ACTIVE_GAMES.get((chat_id, thread_id))
+    if not game:
+        jc = context.user_data.get("join_chat")
+        jt = context.user_data.get("join_thread")
+        if jc is not None and jt is not None:
+            game = ACTIVE_GAMES.get((jc, jt))
+            chat_id, thread_id = jc, jt
     if not game or query.from_user.id != game.host_id:
         return
     if query.data.startswith("time_"):
@@ -806,7 +822,7 @@ async def restart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             ]
         ]
         if query.from_user.id == ADMIN_ID:
-            buttons.append([InlineKeyboardButton("[адм.] Тест", callback_data="adm_test")])
+            buttons.append([InlineKeyboardButton("[адм.] Тестовая игра", callback_data="adm_test")])
         await reply_game_message(
             query.message,
             context,
