@@ -386,19 +386,28 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         game.status = "waiting"
         code = secrets.token_urlsafe(8)
         JOIN_CODES[code] = (chat_id, thread_id)
-        await query.edit_message_text("Игра создана. Пригласите участников.")
-        buttons = [
+        invite_buttons = [
             [
                 InlineKeyboardButton("Пригласить из контактов", callback_data="invite_contacts"),
                 InlineKeyboardButton("Создать ссылку", callback_data="invite_link"),
-            ],
-            [InlineKeyboardButton("Присоединиться", callback_data="join")],
+            ]
         ]
+        await query.edit_message_text(
+            "Игра создана. Пригласите участников.",
+            reply_markup=InlineKeyboardMarkup(invite_buttons),
+        )
         await reply_game_message(
             query.message,
             context,
-            "Выберите действие:",
-            reply_markup=InlineKeyboardMarkup(buttons),
+            "Нажмите, чтобы присоединиться:",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("Присоединиться", callback_data="join")]]
+            ),
+        )
+        await reply_game_message(
+            query.message,
+            context,
+            "Когда все участники присоединились, перейдите к выбору базового слова",
         )
     elif query.data == "adm_test" and query.from_user.id == ADMIN_ID:
         game.time_limit = 3
