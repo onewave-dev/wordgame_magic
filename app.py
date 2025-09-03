@@ -203,7 +203,30 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "Вы можете присоединиться к игре. Зайдите в чат и нажмите кнопку 'Присоединиться'.",
         )
     else:
-        await reply_game_message(update.message, context, "Привет! Используйте /newgame в групповом чате.")
+        text = "Привет! Используйте /newgame в групповом чате."
+        if not context.user_data.get("home_link_shown"):
+            link = f"https://t.me/{BOT_USERNAME}?start=home"
+            msg = await reply_game_message(
+                update.message,
+                context,
+                text,
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("Создать игру", url=link)]]
+                ),
+            )
+            context.user_data["home_link_shown"] = True
+            context.user_data["home_link_msg_id"] = msg.message_id
+        else:
+            await reply_game_message(update.message, context, text)
+
+
+async def clear_home_link_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg_id = context.user_data.pop("home_link_msg_id", None)
+    if msg_id:
+        try:
+            await context.bot.delete_message(update.effective_chat.id, msg_id)
+        except TelegramError:
+            pass
 
 
 async def request_name(user_id: int, chat_id: int, context: CallbackContext) -> None:
@@ -851,6 +874,7 @@ async def on_startup() -> None:
     global APPLICATION, BOT_USERNAME
     APPLICATION = Application.builder().token(TOKEN).build()
     BOT_USERNAME = (await APPLICATION.bot.get_me()).username
+    APPLICATION.add_handler(MessageHandler(filters.ALL, clear_home_link_message, block=False), group=-1)
     APPLICATION.add_handler(CommandHandler("start", start_cmd))
     APPLICATION.add_handler(CommandHandler("newgame", newgame))
     APPLICATION.add_handler(CommandHandler("join", join_cmd))
