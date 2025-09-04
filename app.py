@@ -454,11 +454,14 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     game.player_chats[user_id] = chat.id
     player = game.players.get(user_id)
+    # Ignore non-reply messages from players who already have a name
+    if player and player.name and update.message.reply_to_message is None:
+        return
     name = update.message.text.strip()
     if not player:
         if len(game.players) >= 5:
             await reply_game_message(update.message, context, "Лобби заполнено")
-            return
+            raise ApplicationHandlerStop
         player = Player(user_id=user_id, name=name)
         game.players[user_id] = player
         context.user_data["join_chat"] = chat_id
@@ -468,7 +471,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         host_chat = game.player_chats.get(game.host_id)
         if host_chat:
             await maybe_show_base_options(host_chat, None, context, game)
-        return
+        raise ApplicationHandlerStop
     if not player.name:
         player.name = name
         context.user_data["name"] = name
@@ -491,6 +494,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         host_chat = game.player_chats.get(game.host_id)
         if host_chat:
             await maybe_show_base_options(host_chat, None, context, game)
+        raise ApplicationHandlerStop
 
 
 async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1302,7 +1306,7 @@ async def on_startup() -> None:
     APPLICATION.add_handler(CommandHandler("join", join_cmd))
     APPLICATION.add_handler(CommandHandler(["quit", "exit"], quit_cmd))
     APPLICATION.add_handler(CommandHandler("chatid", chat_id_handler))
-    APPLICATION.add_handler(MessageHandler(filters.REPLY & filters.TEXT & (~filters.COMMAND), handle_name))
+    APPLICATION.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_name))
     APPLICATION.add_handler(CallbackQueryHandler(time_selected, pattern="^(time_|adm_test)"))
     APPLICATION.add_handler(CallbackQueryHandler(join_button, pattern="^join_"))
     APPLICATION.add_handler(CallbackQueryHandler(invite_contacts, pattern="^invite_contacts$"))
