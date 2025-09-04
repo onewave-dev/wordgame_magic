@@ -98,13 +98,18 @@ LAST_REFRESH: Dict[Tuple[int, int], float] = {}
 
 
 def get_game(chat_id: int, thread_id: Optional[int]) -> Optional[GameState]:
-    """Retrieve game by chat and thread.
+    """Retrieve a game by chat and thread identifiers.
 
-    `thread_id` values ``None`` and ``0`` are treated as equivalent so that
-    direct messages and private threads map to the same game entry.
+    The ``thread_id`` is normalised so that ``None`` and ``0`` are treated as
+    the same value.  This allows direct messages, where the thread identifier
+    might be missing, to match entries registered under either representation.
     """
-    key = (chat_id, thread_id or 0)
+    tid = 0 if thread_id in (None, 0) else thread_id
+    key = (chat_id, tid)
     game_id = CHAT_GAMES.get(key)
+    if game_id is None and tid == 0:
+        # Support lookups stored under ``None`` for compatibility
+        game_id = CHAT_GAMES.get((chat_id, None))
     if game_id:
         return ACTIVE_GAMES.get(game_id)
     return None
