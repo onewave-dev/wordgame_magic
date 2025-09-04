@@ -504,8 +504,11 @@ async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if user_id != game.host_id:
         await reply_game_message(update.message, context, "Только инициатор может прервать игру")
         return
-    for job in game.jobs.values():
-        job.schedule_removal()
+    for job in list(game.jobs.values()):
+        try:
+            job.schedule_removal()
+        except Exception:
+            pass
     game.jobs.clear()
     msg_id = BASE_MSG_IDS.get(game.game_id)
     if msg_id:
@@ -748,8 +751,11 @@ async def end_game(context: CallbackContext) -> None:
         ]
     )
     await broadcast(game.game_id, message, reply_markup=keyboard)
-    for job in game.jobs.values():
-        job.schedule_removal()
+    for job in list(game.jobs.values()):
+        try:
+            job.schedule_removal()
+        except Exception:
+            pass
     game.jobs.clear()
     BASE_MSG_IDS.pop(game.game_id, None)
     ACTIVE_GAMES.pop(game.game_id, None)
@@ -763,8 +769,11 @@ def reset_game(game: GameState) -> None:
     game.base_word = ""
     game.letters.clear()
     game.status = "config"
-    for job in game.jobs.values():
-        job.schedule_removal()
+    for job in list(game.jobs.values()):
+        try:
+            job.schedule_removal()
+        except Exception:
+            pass
     game.jobs.clear()
     BASE_MSG_IDS.pop(game.game_id, None)
 
@@ -1071,7 +1080,11 @@ async def on_startup() -> None:
     APPLICATION.add_handler(CommandHandler("join", join_cmd))
     APPLICATION.add_handler(CommandHandler(["quit", "exit"], quit_cmd))
     APPLICATION.add_handler(CommandHandler("chatid", chat_id_handler))
-    APPLICATION.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_name))
+    # handle_name — только ответы на ForceReply, в отдельной группе
+    APPLICATION.add_handler(
+        MessageHandler(filters.REPLY & filters.TEXT & (~filters.COMMAND), handle_name),
+        group=1,
+    )
     APPLICATION.add_handler(CallbackQueryHandler(time_selected, pattern="^(time_|adm_test)"))
     APPLICATION.add_handler(CallbackQueryHandler(join_button, pattern="^join_"))
     APPLICATION.add_handler(CallbackQueryHandler(invite_contacts, pattern="^invite_contacts$"))
