@@ -442,6 +442,18 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     chat = query.message.chat
     chat_id = chat.id
     thread_id = query.message.message_thread_id
+    if query.data == "adm_test" and query.from_user.id == ADMIN_ID:
+        game = create_dm_game(query.from_user.id)
+        game.players[query.from_user.id].name = query.from_user.first_name or ""
+        context.user_data["join_chat"] = chat_id
+        context.user_data["join_thread"] = thread_id
+        game.time_limit = 3
+        game.players[0] = Player(user_id=0, name="Bot")
+        game.status = "waiting"
+        await query.edit_message_text("Тестовая игра создана")
+        await maybe_show_base_options(chat_id, thread_id, context, game)
+        return
+
     game = get_game(chat_id, thread_id)
     if not game and chat.type == "private":
         game = create_dm_game(query.from_user.id)
@@ -485,13 +497,6 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 context,
                 "Когда все участники присоединились, перейдите к выбору базового слова",
             )
-    elif query.data == "adm_test" and query.from_user.id == ADMIN_ID:
-        game.time_limit = 3
-        bot_player = Player(user_id=0, name="Bot")
-        game.players[0] = bot_player
-        game.status = "waiting"
-        await query.edit_message_text("Тестовая игра создана")
-        await maybe_show_base_options(chat_id, thread_id, context)
 
 
 async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -832,11 +837,9 @@ async def set_base_word(chat_id: int, thread_id: int, word: str, context: Callba
         if chosen_by
         else f"Выбрано слово: {game.base_word}"
     )
-    await send_game_message(chat_id, thread_id, context, message)
-    await send_game_message(
-        chat_id,
-        thread_id,
-        context,
+    await broadcast(game.game_id, message)
+    await broadcast(
+        game.game_id,
         "Нажмите Старт, когда будете готовы",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Старт", callback_data="start")]]),
     )
