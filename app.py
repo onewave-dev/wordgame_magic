@@ -9,7 +9,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Optional, Set, List, Tuple
+from typing import Any, Dict, Optional, Set, List, Tuple
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
@@ -545,26 +545,42 @@ async def base_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             candidates = [w for w in candidates if len(w) >= 9]
         words = random.sample(candidates, 3)
         buttons = [[InlineKeyboardButton(w, callback_data=f"pick_{w}")] for w in words]
-        await send_game_message(
-            chat_id,
-            thread_id,
-            context,
-            "Выберите слово:",
-            reply_markup=InlineKeyboardMarkup(buttons),
-        )
+        markup = InlineKeyboardMarkup(buttons)
+
+        sent_messages: List[Tuple[int, int]] = []
+        count_jobs: List[Any] = []
+        for cid in set(game.player_chats.values()):
+            thread = thread_id if cid == chat_id else None
+            msg = await send_game_message(
+                cid,
+                thread,
+                context,
+                "Выберите слово:",
+                reply_markup=markup,
+            )
+            sent_messages.append((cid, msg.message_id))
+            job = context.job_queue.run_repeating(
+                countdown,
+                interval=1,
+                chat_id=cid,
+                data={
+                    "thread_id": thread,
+                    "remaining": 5,
+                    "message_id": msg.message_id,
+                    "reply_markup": markup,
+                },
+                name=f"cnt_{cid}_{thread or 0}",
+            )
+            count_jobs.append(job)
+
+        game.jobs["rand_msgs"] = sent_messages
+        game.jobs["count"] = count_jobs
         game.jobs["rand"] = context.job_queue.run_once(
             finish_random,
             5,
             chat_id=chat_id,
             data={"thread_id": thread_id, "words": words},
             name=f"rand_{chat_id}_{thread_id}",
-        )
-        game.jobs["count"] = context.job_queue.run_repeating(
-            countdown,
-            interval=1,
-            chat_id=chat_id,
-            data={"thread_id": thread_id, "remaining": 5},
-            name=f"cnt_{chat_id}_{thread_id}",
         )
 
     elif query.data.startswith("pick_"):
@@ -574,9 +590,11 @@ async def base_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if "rand" in game.jobs:
             job = game.jobs.pop("rand")
             job.schedule_removal()
-        if "count" in game.jobs:
-            job = game.jobs.pop("count")
-            job.schedule_removal()
+        for job in game.jobs.pop("count", []):
+            try:
+                job.schedule_removal()
+            except Exception:
+                pass
         player = game.players.get(query.from_user.id)
         chosen_by = player.name if player and player.name else query.from_user.full_name
         await set_base_word(chat_id, thread_id, word, context, chosen_by=chosen_by)
@@ -589,9 +607,11 @@ async def finish_random(context: CallbackContext) -> None:
     game = get_game(chat_id, thread_id or 0)
     if not game or game.base_word:
         return
-    if "count" in game.jobs:
-        job = game.jobs.pop("count")
-        job.schedule_removal()
+    for job in game.jobs.pop("count", []):
+        try:
+            job.schedule_removal()
+        except Exception:
+            pass
     game.jobs.pop("rand", None)
     word = random.choice(data.get("words", []))
     await set_base_word(chat_id, thread_id, word, context)
@@ -608,9 +628,16 @@ async def countdown(context: CallbackContext) -> None:
         return
 
     msg_id = data.get("message_id")
+    markup = data.get("reply_markup")
     try:
         if msg_id:
-            await context.bot.edit_message_text(str(remaining), chat_id, msg_id, message_thread_id=thread_id)
+            await context.bot.edit_message_text(
+                str(remaining),
+                chat_id,
+                msg_id,
+                message_thread_id=thread_id,
+                reply_markup=markup,
+            )
         else:
             msg = await send_game_message(chat_id, thread_id, context, str(remaining))
             data["message_id"] = msg.message_id
