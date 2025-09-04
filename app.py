@@ -507,7 +507,7 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         context.user_data["join_chat"] = chat_id
         context.user_data["join_thread"] = thread_id
         game.time_limit = 3
-        game.players[0] = Player(user_id=0, name="Bot")
+        game.players[0] = Player(user_id=0, name="Бот")
         game.status = "waiting"
         tid = thread_id or 0
         CHAT_GAMES[(chat_id, tid)] = game.game_id
@@ -936,15 +936,19 @@ async def end_game(context: CallbackContext) -> None:
         except Exception:
             pass
     players_sorted = sorted(game.players.values(), key=lambda p: p.points, reverse=True)
-    scores = [(p.name or str(uid), p.points) for uid, p in game.players.items()]
-    scores.sort(key=lambda x: x[1], reverse=True)
-    max_score = scores[0][1] if scores else 0
-    winners = [name for name, pts in scores if pts == max_score]
+
+    def format_name(player: Player) -> str:
+        name = player.name or str(player.user_id)
+        if player.user_id == 0 or name.lower() in {"bot", "бот"}:
+            name = f"🤖 {name}"
+        return name
+
+    max_score = players_sorted[0].points if players_sorted else 0
+    winners = [p for p in players_sorted if p.points == max_score]
 
     lines = ["Игра окончена! Результаты:", "", f"Слово: {game.base_word.upper()}", ""]
     for p in players_sorted:
-        name = p.name or str(p.user_id)
-        lines.append(name)
+        lines.append(format_name(p))
         for i, w in enumerate(p.words, 1):
             pts = 2 if len(w) >= 6 else 1
             lines.append(f"{i}. {w} — {pts}")
@@ -953,9 +957,9 @@ async def end_game(context: CallbackContext) -> None:
 
     if winners:
         if len(winners) == 1:
-            lines.append(f"🏆 Победитель: {winners[0]}")
+            lines.append(f"🏆 Победитель: {format_name(winners[0])}")
         else:
-            lines.append("🏆 Победители: " + ", ".join(winners))
+            lines.append("🏆 Победители: " + ", ".join(format_name(p) for p in winners))
     message = "\n".join(lines).rstrip()
     await broadcast(game.game_id, message)
     try:
@@ -1216,7 +1220,7 @@ async def bot_move(context: CallbackContext) -> None:
         pts = 2 if len(word) >= 6 else 1
         bot_player.points += pts
         game.used_words.add(word)
-        await broadcast(game.game_id, f"Bot: {word}")
+        await broadcast(game.game_id, f"🤖 {bot_player.name}: {word}")
         schedule_refresh_base_button(chat_id, thread_id, context)
 
 
