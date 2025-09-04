@@ -85,7 +85,7 @@ class Player:
 class GameState:
     host_id: int
     game_id: str
-    time_limit: int = 3
+    time_limit: float = 3
     base_word: str = ""
     letters: Counter = field(default_factory=Counter)
     players: Dict[int, Player] = field(default_factory=dict)
@@ -347,7 +347,7 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if query.data == "adm_test" and query.from_user.id == ADMIN_ID:
         game = create_dm_game(query.from_user.id)
         game.players[query.from_user.id].name = context.user_data.get("name", "")
-        game.time_limit = 3
+        game.time_limit = 1.5
         game.players[0] = Player(user_id=0, name="Бот")
         game.status = "waiting"
         await query.edit_message_text("Тестовая игра создана")
