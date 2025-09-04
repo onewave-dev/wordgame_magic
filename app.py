@@ -140,7 +140,7 @@ async def broadcast(game_id: str, text: str, reply_markup=None) -> None:
 
 async def refresh_base_button(chat_id: int, thread_id: int, context: CallbackContext) -> None:
     """Resend base word button to keep it the last message."""
-    game = get_game(chat_id, thread_id or 0)
+    game = get_game(chat_id, thread_id)
     if not game or game.status != "running" or not game.base_word:
         return
     text = "Собирайте слова из букв базового слова:"
@@ -464,6 +464,10 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         game.time_limit = 3
         game.players[0] = Player(user_id=0, name="Bot")
         game.status = "waiting"
+        tid = thread_id or 0
+        CHAT_GAMES[(chat_id, tid)] = game.game_id
+        GAME_CHATS[game.game_id] = (chat_id, tid)
+        game.player_chats[query.from_user.id] = chat_id
         await query.edit_message_text("Тестовая игра создана")
         await maybe_show_base_options(chat_id, thread_id, context, game)
         return
@@ -997,7 +1001,7 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     user_id = update.effective_user.id
     tokens = update.message.text.split()
     words_tokens = tokens
-    game = get_game(chat_id, thread_id or 0)
+    game = get_game(chat_id, thread_id)
     if not game and chat.type == "private":
         if tokens:
             gid = tokens[0]
