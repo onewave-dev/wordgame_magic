@@ -629,22 +629,41 @@ async def countdown(context: CallbackContext) -> None:
 
     msg_id = data.get("message_id")
     markup = data.get("reply_markup")
+    text = f"⏱️ <b>{remaining}</b>"
     try:
         if msg_id:
             await context.bot.edit_message_text(
-                str(remaining),
+                text,
                 chat_id,
                 msg_id,
                 message_thread_id=thread_id,
                 reply_markup=markup,
+                parse_mode="HTML",
             )
+            data["message_id"] = msg_id
         else:
-            msg = await send_game_message(chat_id, thread_id, context, str(remaining))
+            msg = await send_game_message(
+                chat_id,
+                thread_id,
+                context,
+                text,
+                reply_markup=markup,
+                parse_mode="HTML",
+            )
             data["message_id"] = msg.message_id
-    except Exception:
-        # If editing fails (message deleted), send a new one
-        msg = await send_game_message(chat_id, thread_id, context, str(remaining))
-        data["message_id"] = msg.message_id
+    except TelegramError as e:
+        if "message to edit not found" in str(e).lower():
+            msg = await send_game_message(
+                chat_id,
+                thread_id,
+                context,
+                text,
+                reply_markup=markup,
+                parse_mode="HTML",
+            )
+            data["message_id"] = msg.message_id
+        else:
+            raise
 
     data["remaining"] = remaining - 1
 
