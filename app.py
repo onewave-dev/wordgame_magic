@@ -247,21 +247,23 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 "Вы можете присоединиться к игре. Зайдите в чат и нажмите кнопку 'Присоединиться'.",
             )
     else:
-        text = "Привет! Используйте /newgame в групповом чате."
-        if not context.user_data.get("home_link_shown"):
-            link = f"https://t.me/{BOT_USERNAME}?start=home"
-            msg = await reply_game_message(
-                update.message,
-                context,
-                text,
-                reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("Создать игру", url=link)]]
-                ),
-            )
-            context.user_data["home_link_shown"] = True
-            context.user_data["home_link_msg_id"] = msg.message_id
-        else:
-            await reply_game_message(update.message, context, text)
+        buttons = [
+            [
+                InlineKeyboardButton("3 мин", callback_data="time_3"),
+                InlineKeyboardButton("5 мин", callback_data="time_5"),
+            ]
+        ]
+        user = update.effective_user
+        if user and user.id == ADMIN_ID:
+            buttons.append([
+                InlineKeyboardButton("[адм.] Тестовая игра", callback_data="adm_test")
+            ])
+        await reply_game_message(
+            update.message,
+            context,
+            "Выберите длительность игры:",
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
 
 
 async def clear_home_link_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -321,6 +323,8 @@ def create_dm_game(host_id: int) -> GameState:
     game.players[host_id] = Player(user_id=host_id)
     game.player_chats[host_id] = host_id
     ACTIVE_GAMES[game_id] = game
+    CHAT_GAMES[(host_id, None)] = game_id
+    GAME_CHATS[game_id] = (host_id, None)
     return game
 
 
@@ -405,9 +409,15 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
-    chat_id = query.message.chat.id
+    chat = query.message.chat
+    chat_id = chat.id
     thread_id = query.message.message_thread_id
     game = get_game(chat_id, thread_id)
+    if not game and chat.type == "private":
+        game = create_dm_game(query.from_user.id)
+        game.players[query.from_user.id].name = query.from_user.first_name or ""
+        context.user_data["join_chat"] = chat_id
+        context.user_data["join_thread"] = thread_id
     if not game:
         jc = context.user_data.get("join_chat")
         jt = context.user_data.get("join_thread")
@@ -431,19 +441,20 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "Игра создана. Пригласите участников.",
             reply_markup=InlineKeyboardMarkup(invite_buttons),
         )
-        await reply_game_message(
-            query.message,
-            context,
-            "Нажмите, чтобы присоединиться:",
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("Присоединиться", callback_data="join")]]
-            ),
-        )
-        await reply_game_message(
-            query.message,
-            context,
-            "Когда все участники присоединились, перейдите к выбору базового слова",
-        )
+        if chat.type != "private":
+            await reply_game_message(
+                query.message,
+                context,
+                "Нажмите, чтобы присоединиться:",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("Присоединиться", callback_data="join")]]
+                ),
+            )
+            await reply_game_message(
+                query.message,
+                context,
+                "Когда все участники присоединились, перейдите к выбору базового слова",
+            )
     elif query.data == "adm_test" and query.from_user.id == ADMIN_ID:
         game.time_limit = 3
         bot_player = Player(user_id=0, name="Bot")
