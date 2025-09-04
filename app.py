@@ -183,6 +183,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         game = get_game(SUPERGROUP_ID, thread_id)
         if game:
             game.players[user.id] = Player(user_id=user.id, name=user.first_name or "")
+            game.player_chats[user.id] = update.effective_chat.id
         buttons = [
             [
                 InlineKeyboardButton("3 минуты", callback_data="time_3"),
@@ -334,9 +335,15 @@ async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await reply_game_message(update.message, context, f"Игра #{game_id} создана")
 
 
-async def maybe_show_base_options(chat_id: int, thread_id: int, context: CallbackContext) -> None:
+async def maybe_show_base_options(
+    chat_id: int,
+    thread_id: Optional[int],
+    context: CallbackContext,
+    game: Optional[GameState] = None,
+) -> None:
     """Send base word options to the host when conditions are met."""
-    game = get_game(chat_id, thread_id)
+    if game is None:
+        game = get_game(chat_id, thread_id)
     if not game or game.status != "waiting":
         return
     if len(game.players) >= 2 and all(p.name for p in game.players.values()):
@@ -370,6 +377,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             chat_id, thread_id = join_chat, join_thread
     if not game:
         return
+    game.player_chats[user_id] = chat.id
     player = game.players.get(user_id)
     name = update.message.text.strip()
     if not player:
@@ -382,7 +390,9 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         context.user_data["join_thread"] = thread_id
         context.user_data["name"] = name
         await reply_game_message(update.message, context, f"Имя установлено: {player.name}")
-        await maybe_show_base_options(chat_id, thread_id, context)
+        host_chat = game.player_chats.get(game.host_id)
+        if host_chat:
+            await maybe_show_base_options(host_chat, None, context, game)
         return
     if not player.name:
         player.name = name
@@ -403,7 +413,9 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 "Выберите длительность игры:",
                 reply_markup=InlineKeyboardMarkup(buttons),
             )
-        await maybe_show_base_options(chat_id, thread_id, context)
+        host_chat = game.player_chats.get(game.host_id)
+        if host_chat:
+            await maybe_show_base_options(host_chat, None, context, game)
 
 
 async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -447,7 +459,7 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 context,
                 "Нажмите, чтобы присоединиться:",
                 reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("Присоединиться", callback_data="join")]]
+                    [[InlineKeyboardButton("Присоединиться", callback_data=f"join_{code}")]]
                 ),
             )
             await reply_game_message(
@@ -465,53 +477,74 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = update.effective_chat.id
-    thread_id = update.effective_message.message_thread_id
-    game = get_game(chat_id, thread_id)
+    args = context.args
+    if not args:
+        await reply_game_message(update.message, context, "Укажите код приглашения")
+        return
+    join_code = args[0]
+    game_id = JOIN_CODES.get(join_code)
+    if not game_id:
+        await reply_game_message(update.message, context, "Неверный код")
+        return
+    chat_info = get_chat(game_id)
+    if not chat_info:
+        await reply_game_message(update.message, context, "Игра не найдена")
+        return
+    chat_id, thread_id = chat_info
+    game = ACTIVE_GAMES.get(game_id)
     if not game:
+        await reply_game_message(update.message, context, "Игра не найдена")
         return
     user_id = update.effective_user.id
-    if user_id not in game.players:
-        if len(game.players) >= 5:
-            await reply_game_message(update.message, context, "Лобби заполнено")
-            return
-        game.players[user_id] = Player(user_id=user_id)
-        context.user_data['join_chat'] = chat_id
-        context.user_data['join_thread'] = thread_id
-        await reply_game_message(
-            update.message,
-            context,
-            "Добро пожаловать! Введите ваше имя:",
-            reply_markup=ForceReply(selective=True),
-        )
-    else:
+    if user_id in game.players:
         await reply_game_message(update.message, context, "Вы уже в игре")
+        return
+    if len(game.players) >= 5:
+        await reply_game_message(update.message, context, "Лобби заполнено")
+        return
+    game.players[user_id] = Player(user_id=user_id)
+    game.player_chats[user_id] = update.effective_chat.id
+    context.user_data['join_chat'] = chat_id
+    context.user_data['join_thread'] = thread_id
+    await reply_game_message(
+        update.message,
+        context,
+        "Добро пожаловать! Введите ваше имя:",
+        reply_markup=ForceReply(selective=True),
+    )
 
 
 async def join_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
-    chat_id = query.message.chat.id
-    thread_id = query.message.message_thread_id
-    game = get_game(chat_id, thread_id)
+    data = query.data
+    join_code = data.split("_", 1)[1] if "_" in data else ""
+    game_id = JOIN_CODES.get(join_code)
+    if not game_id:
+        return
+    chat_info = get_chat(game_id)
+    if not chat_info:
+        return
+    chat_id, thread_id = chat_info
+    game = ACTIVE_GAMES.get(game_id)
     if not game:
         return
     user_id = query.from_user.id
-    if user_id not in game.players:
-        if len(game.players) < 5:
-            game.players[user_id] = Player(user_id=user_id)
-            context.user_data['join_chat'] = chat_id
-            context.user_data['join_thread'] = thread_id
-            await reply_game_message(
-                query.message,
-                context,
-                "Добро пожаловать! Введите ваше имя:",
-                reply_markup=ForceReply(selective=True),
-            )
-        else:
-            await reply_game_message(query.message, context, "Лобби заполнено")
-    else:
-        await reply_game_message(query.message, context, "Вы уже в игре")
+    if user_id in game.players:
+        await context.bot.send_message(user_id, "Вы уже в игре")
+        return
+    if len(game.players) >= 5:
+        await context.bot.send_message(user_id, "Лобби заполнено")
+        return
+    game.players[user_id] = Player(user_id=user_id)
+    game.player_chats[user_id] = user_id
+    context.user_data['join_chat'] = chat_id
+    context.user_data['join_thread'] = thread_id
+    await context.bot.send_message(
+        user_id,
+        "Добро пожаловать! Введите ваше имя:",
+        reply_markup=ForceReply(selective=True),
+    )
 
 
 async def invite_contacts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1074,7 +1107,7 @@ async def on_startup() -> None:
     APPLICATION.add_handler(CommandHandler("chatid", chat_id_handler))
     APPLICATION.add_handler(MessageHandler(filters.REPLY & filters.TEXT & (~filters.COMMAND), handle_name))
     APPLICATION.add_handler(CallbackQueryHandler(time_selected, pattern="^(time_|adm_test)"))
-    APPLICATION.add_handler(CallbackQueryHandler(join_button, pattern="^join$"))
+    APPLICATION.add_handler(CallbackQueryHandler(join_button, pattern="^join_"))
     APPLICATION.add_handler(CallbackQueryHandler(invite_contacts, pattern="^invite_contacts$"))
     APPLICATION.add_handler(CallbackQueryHandler(invite_link, pattern="^invite_link$"))
     APPLICATION.add_handler(CallbackQueryHandler(base_choice, pattern="^(base_|pick_)", block=False))
