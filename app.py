@@ -21,6 +21,7 @@ from telegram import (
     KeyboardButton,
     ReplyKeyboardMarkup,
     KeyboardButtonRequestUsers,
+    User,
 )
 from telegram import Update
 from telegram.ext import (
@@ -314,13 +315,10 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         chat_info = get_chat(gid)
         if chat_info:
             jc, jt = chat_info
-            context.user_data["join_chat"] = jc
-            context.user_data["join_thread"] = jt
-            await reply_game_message(
-                update.message,
-                context,
-                "Вы можете присоединиться к игре. Зайдите в чат и нажмите кнопку 'Присоединиться'.",
-            )
+            await add_player_via_invite(update.effective_user, jc, jt, context)
+        else:
+            await reply_game_message(update.message, context, "Игра не найдена")
+        return
     else:
         buttons = [
             [
@@ -563,6 +561,33 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             )
 
 
+async def add_player_via_invite(
+    user: User,
+    chat_id: int,
+    thread_id: Optional[int],
+    context: CallbackContext,
+) -> None:
+    """Helper to add a player to a game via an invite link or code."""
+    game = get_game(chat_id, thread_id or 0)
+    if not game:
+        await context.bot.send_message(user.id, "Игра не найдена")
+        return
+    user_id = user.id
+    if user_id in game.players:
+        await context.bot.send_message(user_id, "Вы уже в игре")
+        return
+    if len(game.players) >= 5:
+        await context.bot.send_message(user_id, "Лобби заполнено")
+        return
+    game.players[user_id] = Player(user_id=user_id)
+    game.player_chats[user_id] = user_id
+    context.user_data["join_chat"] = chat_id
+    context.user_data["join_thread"] = thread_id
+    await context.bot.send_message(
+        user_id, "Введите ваше имя", reply_markup=ForceReply(selective=True)
+    )
+
+
 async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     args = context.args
     if not args:
@@ -578,27 +603,7 @@ async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await reply_game_message(update.message, context, "Игра не найдена")
         return
     chat_id, thread_id = chat_info
-    game = ACTIVE_GAMES.get(game_id)
-    if not game:
-        await reply_game_message(update.message, context, "Игра не найдена")
-        return
-    user_id = update.effective_user.id
-    if user_id in game.players:
-        await reply_game_message(update.message, context, "Вы уже в игре")
-        return
-    if len(game.players) >= 5:
-        await reply_game_message(update.message, context, "Лобби заполнено")
-        return
-    game.players[user_id] = Player(user_id=user_id)
-    game.player_chats[user_id] = update.effective_chat.id
-    context.user_data['join_chat'] = chat_id
-    context.user_data['join_thread'] = thread_id
-    await reply_game_message(
-        update.message,
-        context,
-        "Добро пожаловать! Введите ваше имя:",
-        reply_markup=ForceReply(selective=True),
-    )
+    await add_player_via_invite(update.effective_user, chat_id, thread_id, context)
 
 
 async def join_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -613,25 +618,7 @@ async def join_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not chat_info:
         return
     chat_id, thread_id = chat_info
-    game = ACTIVE_GAMES.get(game_id)
-    if not game:
-        return
-    user_id = query.from_user.id
-    if user_id in game.players:
-        await context.bot.send_message(user_id, "Вы уже в игре")
-        return
-    if len(game.players) >= 5:
-        await context.bot.send_message(user_id, "Лобби заполнено")
-        return
-    game.players[user_id] = Player(user_id=user_id)
-    game.player_chats[user_id] = user_id
-    context.user_data['join_chat'] = chat_id
-    context.user_data['join_thread'] = thread_id
-    await context.bot.send_message(
-        user_id,
-        "Добро пожаловать! Введите ваше имя:",
-        reply_markup=ForceReply(selective=True),
-    )
+    await add_player_via_invite(query.from_user, chat_id, thread_id, context)
 
 
 async def invite_contacts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
