@@ -211,6 +211,27 @@ async def reply_game_message(message, context: CallbackContext, text: str, **kwa
     return msg
 
 
+# --- Tap logger -------------------------------------------------------------
+
+async def _tap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Lightweight logger for every update that reaches PTB."""
+    msg = getattr(update, "message", None)
+    if msg:
+        logger.debug(
+            "TAP message: chat_id=%s type=%s thread=%s user=%s text=%r",
+            msg.chat.id, msg.chat.type, msg.message_thread_id,
+            (msg.from_user.id if msg.from_user else None),
+            (msg.text if msg.text else None),
+        )
+    cq = getattr(update, "callback_query", None)
+    if cq and cq.message:
+        logger.debug(
+            "TAP callback: chat_id=%s thread=%s from=%s data=%r",
+            cq.message.chat.id, cq.message.message_thread_id,
+            (cq.from_user.id if cq.from_user else None), cq.data,
+        )
+
+
 # --- FastAPI & PTB integration ---------------------------------------------
 
 app = FastAPI()
@@ -1019,7 +1040,18 @@ async def restart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     start_ts = perf_counter()
-    logger.debug("word_message start %.6f", start_ts)
+    # подробный входной лог
+    try:
+        logger.debug(
+            "word_message ENTER chat_id=%s type=%s thread=%s user=%s text=%r",
+            update.effective_chat.id if update.effective_chat else None,
+            update.effective_chat.type if update.effective_chat else None,
+            update.effective_message.message_thread_id if update.effective_message else None,
+            update.effective_user.id if update.effective_user else None,
+            update.effective_message.text if update.effective_message else None,
+        )
+    except Exception:
+        pass
     chat = update.effective_chat
     chat_id = chat.id
     thread_id = update.effective_message.message_thread_id
@@ -1027,6 +1059,12 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     tokens = update.message.text.split()
     words_tokens = tokens
     game = get_game(chat_id, thread_id)
+    logger.debug(
+        "word_message after get_game: game=%s status=%s (chat=%s,thread=%s)",
+        (game.game_id if game else None),
+        (game.status if game else None),
+        chat_id, thread_id
+    )
     if not game and chat.type == "private":
         if tokens:
             gid = tokens[0]
@@ -1046,7 +1084,12 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                         chat_id, thread_id = chat_info
                     break
     if not game or game.status != "running":
-        logger.debug("game not running or not found")
+        logger.debug(
+            "word_message EXIT: no game or not running; game=%s status=%s chat=%s thread=%s",
+            (game.game_id if game else None),
+            (game.status if game else None),
+            chat_id, thread_id
+        )
         return
     game.player_chats[user_id] = chat.id
     player = game.players.get(user_id)
@@ -1259,6 +1302,9 @@ async def on_startup() -> None:
     global APPLICATION, BOT_USERNAME
     APPLICATION = Application.builder().token(TOKEN).build()
     BOT_USERNAME = (await APPLICATION.bot.get_me()).username
+    # 0) «Кран-тик» — логируем все апдейты как можно раньше
+    APPLICATION.add_handler(MessageHandler(filters.ALL, _tap, block=False), group=-2)
+    # 1) служебный хендлер очистки
     APPLICATION.add_handler(MessageHandler(filters.ALL, clear_home_link_message, block=False), group=-1)
     APPLICATION.add_handler(CommandHandler("start", start_cmd))
     APPLICATION.add_handler(CommandHandler("newgame", newgame))
@@ -1274,7 +1320,15 @@ async def on_startup() -> None:
     APPLICATION.add_handler(CallbackQueryHandler(start_button, pattern="^start$"))
     APPLICATION.add_handler(CallbackQueryHandler(restart_handler, pattern="^restart_"))
     APPLICATION.add_handler(MessageHandler(filters.StatusUpdate.USERS_SHARED, users_shared_handler))
-    APPLICATION.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), manual_base_word, block=False))
+    # 2) Поднять основной обработчик слов выше прочих текстовых; он неблокирующий
+    APPLICATION.add_handler(
+        MessageHandler(filters.TEXT & (~filters.COMMAND), word_message, block=False),
+        group=0
+    )
+    # Остальные текстовые — ниже
+    APPLICATION.add_handler(
+        MessageHandler(filters.TEXT & (~filters.COMMAND), manual_base_word, block=False)
+    )
     APPLICATION.add_handler(
         MessageHandler(
             filters.ChatType.PRIVATE & ~filters.COMMAND,
@@ -1282,7 +1336,7 @@ async def on_startup() -> None:
             block=False,
         )
     )
-    APPLICATION.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), word_message))
+    # (раньше мы регистрировали word_message здесь; перенесено выше)
     
     
     await APPLICATION.initialize()
