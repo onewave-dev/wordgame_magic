@@ -224,23 +224,9 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     user = update.effective_user
     game = create_dm_game(user.id)
-    game.players[user.id].name = user.first_name or ""
-    buttons = [
-        [
-            InlineKeyboardButton("3 мин", callback_data="time_3"),
-            InlineKeyboardButton("5 мин", callback_data="time_5"),
-        ]
-    ]
-    if user.id == ADMIN_ID:
-        buttons.append([
-            InlineKeyboardButton("[адм.] Тестовая игра", callback_data="adm_test")
-        ])
-    await reply_game_message(
-        update.message,
-        context,
-        "Выберите длительность игры:",
-        reply_markup=InlineKeyboardMarkup(buttons),
-    )
+    if update.message:
+        await reply_game_message(update.message, context, f"Игра #{game.game_id} создана")
+    await request_name(user.id, update.effective_chat.id, context)
 
 
 async def request_name(user_id: int, chat_id: int, context: CallbackContext) -> None:
@@ -266,9 +252,10 @@ def create_dm_game(host_id: int) -> GameState:
 async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     game = create_dm_game(user.id)
-    game.players[user.id].name = user.first_name or ""
+    chat_id = update.effective_chat.id
     if update.message:
         await reply_game_message(update.message, context, f"Игра #{game.game_id} создана")
+    await request_name(user.id, chat_id, context)
 
 
 async def maybe_show_base_options(
@@ -359,7 +346,7 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     thread_id = query.message.message_thread_id
     if query.data == "adm_test" and query.from_user.id == ADMIN_ID:
         game = create_dm_game(query.from_user.id)
-        game.players[query.from_user.id].name = query.from_user.first_name or ""
+        game.players[query.from_user.id].name = context.user_data.get("name", "")
         game.time_limit = 3
         game.players[0] = Player(user_id=0, name="Бот")
         game.status = "waiting"
@@ -370,7 +357,8 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     game = get_game(chat_id, thread_id or 0)
     if not game and chat.type == "private":
         game = create_dm_game(query.from_user.id)
-        game.players[query.from_user.id].name = query.from_user.first_name or ""
+        await request_name(query.from_user.id, chat_id, context)
+        return
     if not game or query.from_user.id != game.host_id:
         return
     if query.data.startswith("time_"):
