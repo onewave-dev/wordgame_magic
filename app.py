@@ -127,6 +127,32 @@ def get_chat(game_id: str) -> Optional[Tuple[int, int]]:
     return GAME_CHATS.get(game_id)
 
 
+async def _tap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = getattr(update, "message", None)
+    if msg:
+        logger.debug(
+            "TAP message: chat_id=%s type=%s thread=%s user=%s text=%r",
+            msg.chat.id, msg.chat.type, msg.message_thread_id,
+            (msg.from_user.id if msg.from_user else None),
+            (msg.text if msg.text else None),
+        )
+    cq = getattr(update, "callback_query", None)
+    if cq:
+        logger.debug(
+            "TAP callback: chat_id=%s thread=%s from=%s data=%r",
+            cq.message.chat.id if cq.message else None,
+            cq.message.message_thread_id if cq.message else None,
+            cq.from_user.id if cq.from_user else None,
+            cq.data,
+        )
+
+# ПЕРВЫМ хендлером, group=-2 и block=False, чтобы просто логировать все
+APPLICATION.add_handler(
+    MessageHandler(filters.ALL, _tap, block=False),
+    group=-2
+)
+
+
 async def broadcast(game_id: str, text: str, reply_markup=None) -> None:
     """Send a message to the game topic and all player chats."""
     if not APPLICATION:
@@ -1019,6 +1045,14 @@ async def restart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     start_ts = perf_counter()
+    logger.debug(
+    "word_message ENTER chat_id=%s type=%s thread=%s user=%s text=%r",
+    update.effective_chat.id,
+    update.effective_chat.type,
+    update.effective_message.message_thread_id,
+    update.effective_user.id,
+    update.effective_message.text,
+    )
     logger.debug("word_message start %.6f", start_ts)
     chat = update.effective_chat
     chat_id = chat.id
@@ -1027,6 +1061,12 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     tokens = update.message.text.split()
     words_tokens = tokens
     game = get_game(chat_id, thread_id)
+    logger.debug(
+    "word_message game=%s status=%s resolved_to=(chat=%s,thread=%s)",
+    (game.game_id if game else None),
+    (game.status if game else None),
+    chat_id, thread_id
+    )
     if not game and chat.type == "private":
         if tokens:
             gid = tokens[0]
@@ -1274,6 +1314,7 @@ async def on_startup() -> None:
     APPLICATION.add_handler(CallbackQueryHandler(start_button, pattern="^start$"))
     APPLICATION.add_handler(CallbackQueryHandler(restart_handler, pattern="^restart_"))
     APPLICATION.add_handler(MessageHandler(filters.StatusUpdate.USERS_SHARED, users_shared_handler))
+    APPLICATION.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), word_message))
     APPLICATION.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), manual_base_word, block=False))
     APPLICATION.add_handler(
         MessageHandler(
@@ -1282,7 +1323,7 @@ async def on_startup() -> None:
             block=False,
         )
     )
-    APPLICATION.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), word_message))
+
     
     
     await APPLICATION.initialize()
