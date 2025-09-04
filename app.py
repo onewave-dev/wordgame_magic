@@ -17,12 +17,12 @@ from telegram import (
     BotCommand,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    Update,
     ForceReply,
     KeyboardButton,
     ReplyKeyboardMarkup,
     KeyboardButtonRequestUsers,
 )
+from telegram import Update
 from telegram.ext import (
     Application,
     ApplicationHandlerStop,
@@ -763,8 +763,7 @@ async def base_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
         game.jobs["count"] = context.job_queue.run_repeating(
             countdown,
-            1,
-            count=5,
+            interval=1,
             chat_id=chat_id,
             data={"thread_id": thread_id, "remaining": 5},
             name=f"cnt_{chat_id}_{thread_id}",
@@ -807,6 +806,7 @@ async def countdown(context: CallbackContext) -> None:
     thread_id = data.get("thread_id")
     remaining = data.get("remaining", 0)
     if remaining <= 0:
+        context.job.schedule_removal()
         return
 
     msg_id = data.get("message_id")
@@ -1241,7 +1241,11 @@ async def webhook_check(context: CallbackContext) -> None:
     if not info.url or info.url != expected_url:
         if expected_url:
             try:
-                await context.bot.set_webhook(url=expected_url, secret_token=WEBHOOK_SECRET)
+                await context.bot.set_webhook(
+                    url=expected_url,
+                    secret_token=WEBHOOK_SECRET,
+                    allowed_updates=Update.ALL_TYPES,
+                )
                 logger.info("Webhook registered: %s", expected_url)
             except Exception as e:
                 logger.error("Webhook registration failed: %s", e)
@@ -1292,7 +1296,11 @@ async def on_startup() -> None:
         webhook_url = f"{PUBLIC_URL.rstrip('/')}{WEBHOOK_PATH}"
         info = await APPLICATION.bot.get_webhook_info()
         if info.url != webhook_url:
-            await APPLICATION.bot.set_webhook(url=webhook_url, secret_token=WEBHOOK_SECRET)
+            await APPLICATION.bot.set_webhook(
+                url=webhook_url,
+                secret_token=WEBHOOK_SECRET,
+                allowed_updates=Update.ALL_TYPES,
+            )
 
 
 @app.on_event("shutdown")
@@ -1306,6 +1314,7 @@ async def telegram_webhook(request: Request) -> JSONResponse:
     if request.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET:
         raise HTTPException(status_code=403, detail="Invalid secret")
     data = await request.json()
+    logger.debug("Webhook update keys: %s", list(data.keys()))
     update = Update.de_json(data, APPLICATION.bot)
     await APPLICATION.process_update(update)
     return JSONResponse({"ok": True})
@@ -1314,8 +1323,24 @@ async def telegram_webhook(request: Request) -> JSONResponse:
 @app.get("/set_webhook")
 async def set_webhook() -> JSONResponse:
     webhook_url = f"{PUBLIC_URL.rstrip('/')}{WEBHOOK_PATH}"
-    await APPLICATION.bot.set_webhook(url=webhook_url, secret_token=WEBHOOK_SECRET)
+    await APPLICATION.bot.set_webhook(
+        url=webhook_url,
+        secret_token=WEBHOOK_SECRET,
+        allowed_updates=Update.ALL_TYPES,
+    )
     return JSONResponse({"url": webhook_url})
+
+
+@app.get("/reset_webhook")
+async def reset_webhook() -> JSONResponse:
+    webhook_url = f"{PUBLIC_URL.rstrip('/')}{WEBHOOK_PATH}"
+    await APPLICATION.bot.delete_webhook(drop_pending_updates=False)
+    await APPLICATION.bot.set_webhook(
+        url=webhook_url,
+        secret_token=WEBHOOK_SECRET,
+        allowed_updates=Update.ALL_TYPES,
+    )
+    return JSONResponse({"reset_to": webhook_url})
 
 
 @app.get("/")
