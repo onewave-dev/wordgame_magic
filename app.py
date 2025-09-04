@@ -290,6 +290,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             CHAT_GAMES[(chat.id, 0)] = gid
             GAME_CHATS[gid] = (chat.id, 0)
             game.players[user_id] = Player(user_id=user_id)
+            game.player_chats[user_id] = user_id
             context.user_data["join_chat"] = chat.id
             context.user_data["join_thread"] = 0
             await request_name(user_id, chat.id, context)
