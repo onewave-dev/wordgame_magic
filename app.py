@@ -673,7 +673,7 @@ async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         else "Игра прервана и тема закрыта."
     )
     try:
-        await context.bot.send_message(chat_id, summary)
+        await broadcast(game.game_id, summary)
     except TelegramError:
         pass
 
@@ -910,7 +910,7 @@ async def end_game(context: CallbackContext) -> None:
         else "Игра завершена, тема закрыта."
     )
     try:
-        await context.bot.send_message(chat_id, summary)
+        await broadcast(game.game_id, summary)
     except TelegramError:
         pass
 
