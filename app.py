@@ -128,21 +128,38 @@ def get_chat(game_id: str) -> Optional[Tuple[int, int]]:
 
 
 async def broadcast(game_id: str, text: str, reply_markup=None) -> None:
-    """Send a message to all player chats for the given game."""
+    """Send a message to the game topic and all player chats."""
     if not APPLICATION:
         return
     game = ACTIVE_GAMES.get(game_id)
     if not game:
         return
+
+    # Send to the game topic if available
+    chat_thread = GAME_CHATS.get(game_id)
     sent: Set[int] = set()
-    for chat_id in game.player_chats.values():
-        if chat_id in sent:
-            continue
+    if chat_thread:
+        chat_id, thread_id = chat_thread
         try:
-            await APPLICATION.bot.send_message(chat_id, text, reply_markup=reply_markup)
+            await APPLICATION.bot.send_message(
+                chat_id,
+                text,
+                reply_markup=reply_markup,
+                message_thread_id=thread_id,
+            )
         except TelegramError:
             pass
         sent.add(chat_id)
+
+    # Send to each player's direct messages
+    for cid in game.player_chats.values():
+        if cid in sent:
+            continue
+        try:
+            await APPLICATION.bot.send_message(cid, text)
+        except TelegramError:
+            pass
+        sent.add(cid)
 
 
 async def refresh_base_button(chat_id: int, thread_id: int, context: CallbackContext) -> None:
@@ -474,7 +491,8 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         tid = thread_id or 0
         CHAT_GAMES[(chat_id, tid)] = game.game_id
         GAME_CHATS[game.game_id] = (chat_id, tid)
-        game.player_chats[query.from_user.id] = chat_id
+        topic_key = -(chat_id * 10 + (thread_id or 0))
+        game.player_chats[topic_key] = chat_id
         await query.edit_message_text("Тестовая игра создана")
         await maybe_show_base_options(chat_id, thread_id, context, game)
         return
