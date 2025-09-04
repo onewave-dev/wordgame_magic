@@ -468,6 +468,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         context.user_data["join_thread"] = thread_id
         context.user_data["name"] = name
         await reply_game_message(update.message, context, f"Имя установлено: {player.name}")
+        await broadcast(game.game_id, f"{player.name} присоединился к игре")
         host_chat = game.player_chats.get(game.host_id)
         if host_chat:
             await maybe_show_base_options(host_chat, None, context, game)
@@ -476,6 +477,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         player.name = name
         context.user_data["name"] = name
         await reply_game_message(update.message, context, f"Имя установлено: {player.name}")
+        await broadcast(game.game_id, f"{player.name} присоединился к игре")
         if user_id == game.host_id and game.status == "config":
             buttons = [
                 [
