@@ -1123,6 +1123,60 @@ async def bot_move(context: CallbackContext) -> None:
         schedule_refresh_base_button(chat_id, thread_id, context)
 
 
+async def handle_submission(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle admin word submissions in private chat."""
+    user = update.effective_user
+    if not user or user.id != ADMIN_ID:
+        return
+    message = update.message
+    if not message or not message.text:
+        return
+    chat_id = message.chat_id
+    thread_id = message.message_thread_id
+    game = get_game(chat_id, thread_id)
+    if not game or game.status != "running":
+        return
+    player = game.players.get(user.id)
+    if not player:
+        return
+    words = [normalize_word(w) for w in message.text.split()]
+    for w in words:
+        if not is_cyrillic(w) or len(w) < 3:
+            await message.reply_text(
+                f"Отклонено: {w} (принимаются слова из 3 букв и длиннее)"
+            )
+            continue
+        if w in player.words:
+            await message.reply_text(
+                f"Отклонено: {w} (вы уже использовали это слово)"
+            )
+            continue
+        if w in game.used_words:
+            await message.reply_text(
+                f"Отклонено: {w} (уже использовано другим игроком)"
+            )
+            continue
+        if w not in DICT:
+            await message.reply_text(
+                f"Отклонено: {w} (такого слова нет в словаре)"
+            )
+            continue
+        if not can_make(w, game.letters):
+            await message.reply_text(
+                f"Отклонено: {w} (нет таких букв)"
+            )
+            continue
+        game.used_words.add(w)
+        player.words.append(w)
+        pts = 2 if len(w) >= 6 else 1
+        player.points += pts
+        msg = f"Зачтено: {w}"
+        if len(w) >= 6:
+            msg += "\nБраво! Вы получили 2 очка за это слово. 🤩"
+        await message.reply_text(msg)
+    schedule_refresh_base_button(chat_id, thread_id, context)
+
+
 async def webhook_check(context: CallbackContext) -> None:
     info = await context.bot.get_webhook_info()
     expected_url = f"{PUBLIC_URL.rstrip('/')}{WEBHOOK_PATH}" if PUBLIC_URL else None
@@ -1159,6 +1213,7 @@ async def on_startup() -> None:
     APPLICATION.add_handler(CallbackQueryHandler(restart_handler, pattern="^restart_"))
     APPLICATION.add_handler(MessageHandler(filters.StatusUpdate.USERS_SHARED, users_shared_handler))
     APPLICATION.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), manual_base_word, block=False))
+    APPLICATION.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, handle_submission))
     APPLICATION.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), word_message))
     
     
