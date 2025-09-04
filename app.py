@@ -23,9 +23,16 @@ from telegram import (
     ReplyKeyboardMarkup,
     KeyboardButtonRequestUsers,
 )
-from telegram.ext import (Application, CallbackContext, CallbackQueryHandler,
-                          CommandHandler, MessageHandler, ContextTypes,
-                          filters)
+from telegram.ext import (
+    Application,
+    ApplicationHandlerStop,
+    CallbackContext,
+    CallbackQueryHandler,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
 from telegram.error import TelegramError
 from telegram.constants import ChatMemberStatus
 
@@ -1169,6 +1176,7 @@ async def handle_submission(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not player:
         return
     words = [normalize_word(w) for w in message.text.split()]
+    handled = False
     for w in words:
         if not is_cyrillic(w) or len(w) < 3:
             await message.reply_text(
@@ -1203,7 +1211,10 @@ async def handle_submission(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         if len(w) >= 6:
             msg += "\nБраво! Вы получили 2 очка за это слово. 🤩"
         await message.reply_text(msg)
+        handled = True
     schedule_refresh_base_button(chat_id, thread_id, context)
+    if handled:
+        raise ApplicationHandlerStop
 
 
 async def webhook_check(context: CallbackContext) -> None:
@@ -1242,7 +1253,13 @@ async def on_startup() -> None:
     APPLICATION.add_handler(CallbackQueryHandler(restart_handler, pattern="^restart_"))
     APPLICATION.add_handler(MessageHandler(filters.StatusUpdate.USERS_SHARED, users_shared_handler))
     APPLICATION.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), manual_base_word, block=False))
-    APPLICATION.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, handle_submission))
+    APPLICATION.add_handler(
+        MessageHandler(
+            filters.ChatType.PRIVATE & ~filters.COMMAND,
+            handle_submission,
+            block=False,
+        )
+    )
     APPLICATION.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), word_message))
     
     
