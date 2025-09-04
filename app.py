@@ -747,7 +747,19 @@ async def end_game(context: CallbackContext) -> None:
         else:
             lines.append("🏆 Победители: " + ", ".join(format_name(p) for p in winners))
     message = "\n".join(lines).rstrip()
-    await broadcast(game.game_id, message)
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "Новая игра с теми же участниками", callback_data="restart_yes"
+                ),
+                InlineKeyboardButton(
+                    "Новая игра с другими участниками", callback_data="restart_no"
+                ),
+            ]
+        ]
+    )
+    await broadcast(game.game_id, message, reply_markup=keyboard)
     for job in game.jobs.values():
         job.schedule_removal()
     game.jobs.clear()
@@ -795,9 +807,15 @@ async def restart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             reply_markup=InlineKeyboardMarkup(buttons),
         )
     else:
+        await broadcast(
+            game.game_id,
+            "Игра завершена. Для новой игры с новыми участниками нажмите /start",
+        )
         BASE_MSG_IDS.pop(game.game_id, None)
         ACTIVE_GAMES.pop(game.game_id, None)
-        await query.edit_message_text("Игра завершена. Для новой игры с новыми участниками нажмите /start")
+        await query.edit_message_text(
+            "Игра завершена. Для новой игры с новыми участниками нажмите /start"
+        )
 
 
 async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
