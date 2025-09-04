@@ -4,6 +4,7 @@ import os
 import random
 import secrets
 import logging
+from time import perf_counter
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -963,6 +964,8 @@ async def restart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    start_ts = perf_counter()
+    logger.debug("word_message start %.6f", start_ts)
     chat = update.effective_chat
     chat_id = chat.id
     thread_id = update.effective_message.message_thread_id
@@ -1008,6 +1011,7 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     tasks: List = []
 
     async def send_to_user(text: str) -> None:
+        logger.debug("send_to_user start %.6f", perf_counter() - start_ts)
         try:
             await context.bot.send_message(user_id, text)
         except TelegramError:
@@ -1036,6 +1040,7 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     f"{mention} {text}",
                     parse_mode="HTML",
                 )
+        logger.debug("send_to_user end %.6f", perf_counter() - start_ts)
 
     for w in words:
         if not is_cyrillic(w) or len(w) < 3:
@@ -1075,8 +1080,11 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             tasks.append(broadcast(game.game_id, random.choice(phrases)))
 
     if tasks:
+        logger.debug("before asyncio.gather %.6f", perf_counter() - start_ts)
         await asyncio.gather(*tasks)
+        logger.debug("after asyncio.gather %.6f", perf_counter() - start_ts)
     schedule_refresh_base_button(chat_id, thread_id, context)
+    logger.debug("word_message end %.6f", perf_counter() - start_ts)
 
 async def manual_base_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
