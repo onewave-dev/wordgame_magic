@@ -97,9 +97,14 @@ BASE_MSG_IDS: Dict[str, int] = {}
 LAST_REFRESH: Dict[Tuple[int, int], float] = {}
 
 
-def get_game(chat_id: int, thread_id: int) -> Optional[GameState]:
-    """Retrieve game by chat and thread."""
-    game_id = CHAT_GAMES.get((chat_id, thread_id))
+def get_game(chat_id: int, thread_id: Optional[int]) -> Optional[GameState]:
+    """Retrieve game by chat and thread.
+
+    `thread_id` values ``None`` and ``0`` are treated as equivalent so that
+    direct messages and private threads map to the same game entry.
+    """
+    key = (chat_id, thread_id or 0)
+    game_id = CHAT_GAMES.get(key)
     if game_id:
         return ACTIVE_GAMES.get(game_id)
     return None
@@ -130,7 +135,7 @@ async def broadcast(game_id: str, text: str, reply_markup=None) -> None:
 
 async def refresh_base_button(chat_id: int, thread_id: int, context: CallbackContext) -> None:
     """Resend base word button to keep it the last message."""
-    game = get_game(chat_id, thread_id)
+    game = get_game(chat_id, thread_id or 0)
     if not game or game.status != "running" or not game.base_word:
         return
     text = "Собирайте слова из букв базового слова:"
@@ -154,12 +159,12 @@ async def refresh_base_button(chat_id: int, thread_id: int, context: CallbackCon
 def schedule_refresh_base_button(chat_id: int, thread_id: int, context: CallbackContext) -> None:
     """Throttle refresh of the base word button to avoid blocking."""
     now = asyncio.get_event_loop().time()
-    key = (chat_id, thread_id)
+    key = (chat_id, thread_id or 0)
     last = LAST_REFRESH.get(key, 0)
     if now - last < 1:
         return
     LAST_REFRESH[key] = now
-    asyncio.create_task(refresh_base_button(chat_id, thread_id, context))
+    asyncio.create_task(refresh_base_button(chat_id, thread_id or 0, context))
 
 
 async def send_game_message(chat_id: int, thread_id: Optional[int], context: CallbackContext, text: str, **kwargs):
@@ -199,7 +204,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         game_id, thread_id = await create_game(user.id, context)
         context.user_data["join_chat"] = SUPERGROUP_ID
         context.user_data["join_thread"] = thread_id
-        game = get_game(SUPERGROUP_ID, thread_id)
+        game = get_game(SUPERGROUP_ID, thread_id or 0)
         if game:
             game.players[user.id] = Player(user_id=user.id, name=user.first_name or "")
             game.player_chats[user.id] = update.effective_chat.id
@@ -343,7 +348,10 @@ def create_dm_game(host_id: int) -> GameState:
     game.players[host_id] = Player(user_id=host_id)
     game.player_chats[host_id] = host_id
     ACTIVE_GAMES[game_id] = game
+    # Register both ``None`` and ``0`` thread IDs so that private chats work
+    # regardless of how the thread ID is represented.
     CHAT_GAMES[(host_id, None)] = game_id
+    CHAT_GAMES[(host_id, 0)] = game_id
     GAME_CHATS[game_id] = (host_id, None)
     return game
 
@@ -362,7 +370,7 @@ async def maybe_show_base_options(
 ) -> None:
     """Send base word options to the host when conditions are met."""
     if game is None:
-        game = get_game(chat_id, thread_id)
+        game = get_game(chat_id, thread_id or 0)
     if not game or game.status != "waiting":
         return
     if len(game.players) >= 2 and all(p.name for p in game.players.values()):
@@ -387,12 +395,12 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     chat_id = chat.id
     user_id = update.effective_user.id
     thread_id = update.effective_message.message_thread_id
-    game = get_game(chat_id, thread_id)
+    game = get_game(chat_id, thread_id or 0)
     if not game and chat.type == "private":
         join_chat = context.user_data.get("join_chat")
         join_thread = context.user_data.get("join_thread")
         if join_chat is not None and join_thread is not None:
-            game = get_game(join_chat, join_thread)
+            game = get_game(join_chat, join_thread or 0)
             chat_id, thread_id = join_chat, join_thread
     if not game:
         return
@@ -455,7 +463,7 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await maybe_show_base_options(chat_id, thread_id, context, game)
         return
 
-    game = get_game(chat_id, thread_id)
+    game = get_game(chat_id, thread_id or 0)
     if not game and chat.type == "private":
         game = create_dm_game(query.from_user.id)
         game.players[query.from_user.id].name = query.from_user.first_name or ""
@@ -465,7 +473,7 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         jc = context.user_data.get("join_chat")
         jt = context.user_data.get("join_thread")
         if jc is not None and jt is not None:
-            game = get_game(jc, jt)
+            game = get_game(jc, jt or 0)
             chat_id, thread_id = jc, jt
     if not game or query.from_user.id != game.host_id:
         return
@@ -591,7 +599,7 @@ async def invite_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await query.answer()
     chat_id = query.message.chat.id
     thread_id = query.message.message_thread_id
-    game = get_game(chat_id, thread_id)
+    game = get_game(chat_id, thread_id or 0)
     if not game:
         return
     code = next((c for c, gid in JOIN_CODES.items() if gid == game.game_id), None)
@@ -612,7 +620,7 @@ async def users_shared_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     shared = message.users_shared
     chat_id = update.effective_chat.id
     thread_id = update.effective_message.message_thread_id
-    game = get_game(chat_id, thread_id)
+    game = get_game(chat_id, thread_id or 0)
     if not game:
         return
     code = next((c for c, gid in JOIN_CODES.items() if gid == game.game_id), None)
@@ -639,7 +647,7 @@ async def chat_id_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     thread_id = update.effective_message.message_thread_id
-    game = get_game(chat_id, thread_id)
+    game = get_game(chat_id, thread_id or 0)
     if not game:
         await reply_game_message(update.message, context, "Игра не запущена")
         return
@@ -661,7 +669,11 @@ async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await context.bot.close_forum_topic(chat_id, thread_id)
     except TelegramError:
         pass
-    gid = CHAT_GAMES.pop((chat_id, thread_id), None)
+    key = (chat_id, thread_id or 0)
+    gid = CHAT_GAMES.pop(key, None)
+    if thread_id in (0, None):
+        CHAT_GAMES.pop((chat_id, None), None)
+        CHAT_GAMES.pop((chat_id, 0), None)
     if gid:
         ACTIVE_GAMES.pop(gid, None)
         GAME_CHATS.pop(gid, None)
@@ -683,7 +695,7 @@ async def base_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await query.answer()
     chat_id = query.message.chat.id
     thread_id = query.message.message_thread_id
-    game = get_game(chat_id, thread_id)
+    game = get_game(chat_id, thread_id or 0)
     if not game:
         return
 
@@ -743,7 +755,7 @@ async def finish_random(context: CallbackContext) -> None:
     chat_id = context.job.chat_id
     data = context.job.data or {}
     thread_id = data.get("thread_id")
-    game = get_game(chat_id, thread_id)
+    game = get_game(chat_id, thread_id or 0)
     if not game or game.base_word:
         return
     if "count" in game.jobs:
@@ -802,7 +814,7 @@ async def start_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await query.answer()
     chat_id = query.message.chat.id
     thread_id = query.message.message_thread_id
-    game = get_game(chat_id, thread_id)
+    game = get_game(chat_id, thread_id or 0)
     if not game or query.from_user.id != game.host_id or not game.base_word:
         return
     await query.edit_message_text("Игра начинается!")
@@ -810,7 +822,7 @@ async def start_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def start_game(chat_id: int, thread_id: int, context: CallbackContext) -> None:
-    game = get_game(chat_id, thread_id)
+    game = get_game(chat_id, thread_id or 0)
     if not game:
         return
     game.status = "running"
@@ -828,7 +840,7 @@ async def start_game(chat_id: int, thread_id: int, context: CallbackContext) -> 
 
 
 async def set_base_word(chat_id: int, thread_id: int, word: str, context: CallbackContext, chosen_by: Optional[str] = None) -> None:
-    game = get_game(chat_id, thread_id)
+    game = get_game(chat_id, thread_id or 0)
     if not game:
         return
     game.base_word = normalize_word(word)
@@ -849,7 +861,7 @@ async def set_base_word(chat_id: int, thread_id: int, word: str, context: Callba
 async def warn_time(context: CallbackContext) -> None:
     data = context.job.data or {}
     thread_id = data.get("thread_id")
-    game = get_game(context.job.chat_id, thread_id)
+    game = get_game(context.job.chat_id, thread_id or 0)
     if game:
         await broadcast(game.game_id, "Осталась 1 минута!")
 
@@ -858,7 +870,7 @@ async def end_game(context: CallbackContext) -> None:
     chat_id = context.job.chat_id
     data = context.job.data or {}
     thread_id = data.get("thread_id")
-    game = get_game(chat_id, thread_id)
+    game = get_game(chat_id, thread_id or 0)
     if not game:
         return
     game.status = "finished"
@@ -898,7 +910,11 @@ async def end_game(context: CallbackContext) -> None:
     for job in game.jobs.values():
         job.schedule_removal()
     game.jobs.clear()
-    gid = CHAT_GAMES.pop((chat_id, thread_id), None)
+    key = (chat_id, thread_id or 0)
+    gid = CHAT_GAMES.pop(key, None)
+    if thread_id in (0, None):
+        CHAT_GAMES.pop((chat_id, None), None)
+        CHAT_GAMES.pop((chat_id, 0), None)
     if gid:
         ACTIVE_GAMES.pop(gid, None)
         GAME_CHATS.pop(gid, None)
@@ -934,7 +950,7 @@ async def restart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await query.answer()
     chat_id = query.message.chat.id
     thread_id = query.message.message_thread_id
-    game = get_game(chat_id, thread_id)
+    game = get_game(chat_id, thread_id or 0)
     if not game:
         return
     if query.data == "restart_yes":
@@ -955,7 +971,11 @@ async def restart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             reply_markup=InlineKeyboardMarkup(buttons),
         )
     else:
-        gid = CHAT_GAMES.pop((chat_id, thread_id), None)
+        key = (chat_id, thread_id or 0)
+        gid = CHAT_GAMES.pop(key, None)
+        if thread_id in (0, None):
+            CHAT_GAMES.pop((chat_id, None), None)
+            CHAT_GAMES.pop((chat_id, 0), None)
         if gid:
             ACTIVE_GAMES.pop(gid, None)
             GAME_CHATS.pop(gid, None)
@@ -972,7 +992,7 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     user_id = update.effective_user.id
     tokens = update.message.text.split()
     words_tokens = tokens
-    game = get_game(chat_id, thread_id)
+    game = get_game(chat_id, thread_id or 0)
     if not game and chat.type == "private":
         if tokens:
             gid = tokens[0]
@@ -1090,7 +1110,7 @@ async def manual_base_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     chat_id = update.effective_chat.id
     thread_id = update.effective_message.message_thread_id
     user_id = update.effective_user.id
-    game = get_game(chat_id, thread_id)
+    game = get_game(chat_id, thread_id or 0)
     if not game or user_id != game.host_id or game.base_word:
         return
     word = normalize_word(update.message.text)
@@ -1106,7 +1126,7 @@ async def bot_move(context: CallbackContext) -> None:
     chat_id = context.job.chat_id
     data = context.job.data or {}
     thread_id = data.get("thread_id")
-    game = get_game(chat_id, thread_id)
+    game = get_game(chat_id, thread_id or 0)
     if not game or game.status != "running":
         return
     available = [w for w in DICT if len(w) >= 3 and can_make(w, game.letters) and w not in game.used_words]
@@ -1133,7 +1153,7 @@ async def handle_submission(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
     chat_id = message.chat_id
     thread_id = message.message_thread_id
-    game = get_game(chat_id, thread_id)
+    game = get_game(chat_id, thread_id or 0)
     if not game or game.status != "running":
         return
     player = game.players.get(user.id)
