@@ -1244,7 +1244,7 @@ async def webhook_check(context: CallbackContext) -> None:
                 await context.bot.set_webhook(
                     url=expected_url,
                     secret_token=WEBHOOK_SECRET,
-                    allowed_updates=Update.ALL_TYPES,
+                    allowed_updates=[],
                 )
                 logger.info("Webhook registered: %s", expected_url)
             except Exception as e:
@@ -1299,7 +1299,7 @@ async def on_startup() -> None:
             await APPLICATION.bot.set_webhook(
                 url=webhook_url,
                 secret_token=WEBHOOK_SECRET,
-                allowed_updates=Update.ALL_TYPES,
+                allowed_updates=[],
             )
 
 
@@ -1326,7 +1326,7 @@ async def set_webhook() -> JSONResponse:
     await APPLICATION.bot.set_webhook(
         url=webhook_url,
         secret_token=WEBHOOK_SECRET,
-        allowed_updates=Update.ALL_TYPES,
+        allowed_updates=[],
     )
     return JSONResponse({"url": webhook_url})
 
@@ -1338,7 +1338,7 @@ async def reset_webhook() -> JSONResponse:
     await APPLICATION.bot.set_webhook(
         url=webhook_url,
         secret_token=WEBHOOK_SECRET,
-        allowed_updates=Update.ALL_TYPES,
+        allowed_updates=[],
     )
     return JSONResponse({"reset_to": webhook_url})
 
