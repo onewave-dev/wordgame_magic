@@ -35,7 +35,6 @@ from telegram.ext import (
     filters,
 )
 from telegram.error import TelegramError
-from telegram.constants import ChatMemberStatus
 
 # --- Utilities --------------------------------------------------------------
 
@@ -99,65 +98,31 @@ class GameState:
 
 ACTIVE_GAMES: Dict[str, GameState] = {}
 JOIN_CODES: Dict[str, str] = {}
-CHAT_GAMES: Dict[Tuple[int, int], str] = {}
-GAME_CHATS: Dict[str, Tuple[int, int]] = {}
 BASE_MSG_IDS: Dict[str, int] = {}
 LAST_REFRESH: Dict[Tuple[int, int], float] = {}
 
 
 def get_game(chat_id: int, thread_id: Optional[int]) -> Optional[GameState]:
-    """Retrieve a game by chat and thread identifiers.
-
-    The ``thread_id`` is normalised so that ``None`` and ``0`` are treated as
-    the same value.  This allows direct messages, where the thread identifier
-    might be missing, to match entries registered under either representation.
-    """
-    tid = 0 if thread_id in (None, 0) else thread_id
-    key = (chat_id, tid)
-    game_id = CHAT_GAMES.get(key)
-    if game_id is None and tid == 0:
-        # Support lookups stored under ``None`` for compatibility
-        game_id = CHAT_GAMES.get((chat_id, None))
-    if game_id:
-        return ACTIVE_GAMES.get(game_id)
+    """Retrieve a game by chat identifier."""
+    for g in ACTIVE_GAMES.values():
+        if chat_id in g.player_chats.values():
+            return g
     return None
 
 
-def get_chat(game_id: str) -> Optional[Tuple[int, int]]:
-    """Retrieve chat and thread by game id."""
-    return GAME_CHATS.get(game_id)
-
-
 async def broadcast(game_id: str, text: str, reply_markup=None) -> None:
-    """Send a message to the game topic and all player chats."""
+    """Send a message to all player chats."""
     if not APPLICATION:
         return
     game = ACTIVE_GAMES.get(game_id)
     if not game:
         return
-
-    # Send to the game topic if available
-    chat_thread = GAME_CHATS.get(game_id)
     sent: Set[int] = set()
-    if chat_thread:
-        chat_id, thread_id = chat_thread
-        try:
-            await APPLICATION.bot.send_message(
-                chat_id,
-                text,
-                reply_markup=reply_markup,
-                message_thread_id=thread_id,
-            )
-        except TelegramError:
-            pass
-        sent.add(chat_id)
-
-    # Send to each player's direct messages
     for cid in game.player_chats.values():
         if cid in sent:
             continue
         try:
-            await APPLICATION.bot.send_message(cid, text)
+            await APPLICATION.bot.send_message(cid, text, reply_markup=reply_markup)
         except TelegramError:
             pass
         sent.add(cid)
@@ -245,108 +210,37 @@ PUBLIC_URL = os.environ.get("PUBLIC_URL")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", secrets.token_hex())
 WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "/webhook")
 WORD_CONFIRM_IN_CHAT = os.environ.get("WORD_CONFIRM_IN_CHAT") == "1"
-SUPERGROUP_ID = int(os.getenv("SUPERGROUP_ID", "0"))
 
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     code = context.args[0] if context.args else None
-    if code == "home":
-        user = update.effective_user
-        game_id, thread_id = await create_game(user.id, context)
-        context.user_data["join_chat"] = SUPERGROUP_ID
-        context.user_data["join_thread"] = thread_id
-        game = get_game(SUPERGROUP_ID, thread_id or 0)
-        if game:
-            game.players[user.id] = Player(user_id=user.id, name=user.first_name or "")
-            game.player_chats[user.id] = update.effective_chat.id
-        buttons = [
-            [
-                InlineKeyboardButton("3 минуты", callback_data="time_3"),
-                InlineKeyboardButton("5 минут", callback_data="time_5"),
-            ]
-        ]
-        if user.id == ADMIN_ID:
-            buttons.append([InlineKeyboardButton("[адм.] Тестовая игра", callback_data="adm_test")])
-        await reply_game_message(
-            update.message,
-            context,
-            f"Игра #{game_id} создана. Выберите длительность:",
-            reply_markup=InlineKeyboardMarkup(buttons),
-        )
-        return
-    if code and code.startswith("create_"):
-        key = code.split("create_", 1)[1]
-        chat = update.effective_chat
-        user_id = update.effective_user.id
-        if chat.type in {"group", "supergroup"} and key in JOIN_CODES:
-            JOIN_CODES.pop(key, None)
-            game = get_game(chat.id, 0)
-            if game and game.status in {"waiting", "running"}:
-                await reply_game_message(update.message, context, "Игра уже запущена.")
-                return
-            gid = secrets.token_urlsafe(8)
-            game = GameState(host_id=user_id, game_id=gid)
-            ACTIVE_GAMES[gid] = game
-            CHAT_GAMES[(chat.id, 0)] = gid
-            GAME_CHATS[gid] = (chat.id, 0)
-            game.players[user_id] = Player(user_id=user_id)
-            game.player_chats[user_id] = user_id
-            context.user_data["join_chat"] = chat.id
-            context.user_data["join_thread"] = 0
-            await request_name(user_id, chat.id, context)
-            try:
-                member = await context.bot.get_chat_member(chat.id, context.bot.id)
-                if member.status != ChatMemberStatus.ADMINISTRATOR:
-                    await context.bot.send_message(
-                        user_id,
-                        "Чтобы бот видел слова игроков, отключите режим приватности у @BotFather или повысьте бота до администратора в этом чате",
-                    )
-            except TelegramError:
-                pass
-        else:
-            JOIN_CODES[key] = ""
-            await reply_game_message(
-                update.message,
-                context,
-                "Группа создана. Используйте /newgame для старта.",
-            )
-        return
     if code and code in JOIN_CODES:
         gid = JOIN_CODES[code]
-        chat_info = get_chat(gid)
-        if chat_info:
-            jc, jt = chat_info
-            await add_player_via_invite(update.effective_user, jc, jt, context)
+        game = ACTIVE_GAMES.get(gid)
+        if game:
+            await add_player_via_invite(update.effective_user, game, context)
         else:
             await reply_game_message(update.message, context, "Игра не найдена")
         return
-    else:
-        buttons = [
-            [
-                InlineKeyboardButton("3 мин", callback_data="time_3"),
-                InlineKeyboardButton("5 мин", callback_data="time_5"),
-            ]
+    user = update.effective_user
+    game = create_dm_game(user.id)
+    game.players[user.id].name = user.first_name or ""
+    buttons = [
+        [
+            InlineKeyboardButton("3 мин", callback_data="time_3"),
+            InlineKeyboardButton("5 мин", callback_data="time_5"),
         ]
-        user = update.effective_user
-        if user and user.id == ADMIN_ID:
-            buttons.append([
-                InlineKeyboardButton("[адм.] Тестовая игра", callback_data="adm_test")
-            ])
-        await reply_game_message(
-            update.message,
-            context,
-            "Выберите длительность игры:",
-            reply_markup=InlineKeyboardMarkup(buttons),
-        )
-
-
-async def clear_home_link_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    msg_id = context.user_data.pop("home_link_msg_id", None)
-    if msg_id:
-        try:
-            await context.bot.delete_message(update.effective_chat.id, msg_id)
-        except TelegramError:
-            pass
+    ]
+    if user.id == ADMIN_ID:
+        buttons.append([
+            InlineKeyboardButton("[адм.] Тестовая игра", callback_data="adm_test")
+        ])
+    await reply_game_message(
+        update.message,
+        context,
+        "Выберите длительность игры:",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
 
 
 async def request_name(user_id: int, chat_id: int, context: CallbackContext) -> None:
@@ -359,37 +253,6 @@ async def request_name(user_id: int, chat_id: int, context: CallbackContext) -> 
     )
 
 
-async def create_game(host_id: int, context: CallbackContext) -> Tuple[str, int]:
-    game_id = secrets.token_urlsafe(8)
-    topic = await context.bot.create_forum_topic(
-        chat_id=SUPERGROUP_ID,
-        name=f"Игра #{game_id} • 10 минут",
-    )
-    thread_id = topic.message_thread_id
-    invite = await context.bot.create_chat_invite_link(SUPERGROUP_ID)
-    topic_url = f"https://t.me/c/{str(SUPERGROUP_ID)[4:]}/{thread_id}"
-    keyboard = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("Пригласить игроков", url=invite.invite_link),
-                InlineKeyboardButton("Зайти в комнату", url=topic_url),
-            ]
-        ]
-    )
-    await context.bot.send_message(
-        SUPERGROUP_ID,
-        f"Игра #{game_id} создана",
-        message_thread_id=thread_id,
-        reply_markup=keyboard,
-    )
-    context.application.chat_data.setdefault(SUPERGROUP_ID, {})[thread_id] = game_id
-    game = GameState(host_id=host_id, game_id=game_id)
-    ACTIVE_GAMES[game_id] = game
-    CHAT_GAMES[(SUPERGROUP_ID, thread_id)] = game_id
-    GAME_CHATS[game_id] = (SUPERGROUP_ID, thread_id)
-    return game_id, thread_id
-
-
 def create_dm_game(host_id: int) -> GameState:
     """Create a direct-message game for the host."""
     game_id = secrets.token_urlsafe(8)
@@ -397,18 +260,15 @@ def create_dm_game(host_id: int) -> GameState:
     game.players[host_id] = Player(user_id=host_id)
     game.player_chats[host_id] = host_id
     ACTIVE_GAMES[game_id] = game
-    # Register both ``None`` and ``0`` thread IDs so that private chats work
-    # regardless of how the thread ID is represented.
-    CHAT_GAMES[(host_id, None)] = game_id
-    CHAT_GAMES[(host_id, 0)] = game_id
-    GAME_CHATS[game_id] = (host_id, None)
     return game
 
 
 async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    game_id, _ = await create_game(update.effective_user.id, context)
+    user = update.effective_user
+    game = create_dm_game(user.id)
+    game.players[user.id].name = user.first_name or ""
     if update.message:
-        await reply_game_message(update.message, context, f"Игра #{game_id} создана")
+        await reply_game_message(update.message, context, f"Игра #{game.game_id} создана")
 
 
 async def maybe_show_base_options(
@@ -443,14 +303,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     chat = update.effective_chat
     chat_id = chat.id
     user_id = update.effective_user.id
-    thread_id = update.effective_message.message_thread_id
-    game = get_game(chat_id, thread_id or 0)
-    if not game and chat.type == "private":
-        join_chat = context.user_data.get("join_chat")
-        join_thread = context.user_data.get("join_thread")
-        if join_chat is not None and join_thread is not None:
-            game = get_game(join_chat, join_thread or 0)
-            chat_id, thread_id = join_chat, join_thread
+    game = get_game(chat_id, None)
     if not game:
         return
     game.player_chats[user_id] = chat.id
@@ -465,8 +318,6 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             raise ApplicationHandlerStop
         player = Player(user_id=user_id, name=name)
         game.players[user_id] = player
-        context.user_data["join_chat"] = chat_id
-        context.user_data["join_thread"] = thread_id
         context.user_data["name"] = name
         await reply_game_message(update.message, context, f"Имя установлено: {player.name}")
         await broadcast(game.game_id, f"{player.name} присоединился к игре")
@@ -509,16 +360,9 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if query.data == "adm_test" and query.from_user.id == ADMIN_ID:
         game = create_dm_game(query.from_user.id)
         game.players[query.from_user.id].name = query.from_user.first_name or ""
-        context.user_data["join_chat"] = chat_id
-        context.user_data["join_thread"] = thread_id
         game.time_limit = 3
         game.players[0] = Player(user_id=0, name="Бот")
         game.status = "waiting"
-        tid = thread_id or 0
-        CHAT_GAMES[(chat_id, tid)] = game.game_id
-        GAME_CHATS[game.game_id] = (chat_id, tid)
-        topic_key = -(chat_id * 10 + (thread_id or 0))
-        game.player_chats[topic_key] = chat_id
         await query.edit_message_text("Тестовая игра создана")
         await maybe_show_base_options(chat_id, thread_id, context, game)
         return
@@ -527,14 +371,6 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not game and chat.type == "private":
         game = create_dm_game(query.from_user.id)
         game.players[query.from_user.id].name = query.from_user.first_name or ""
-        context.user_data["join_chat"] = chat_id
-        context.user_data["join_thread"] = thread_id
-    if not game:
-        jc = context.user_data.get("join_chat")
-        jt = context.user_data.get("join_thread")
-        if jc is not None and jt is not None:
-            game = get_game(jc, jt or 0)
-            chat_id, thread_id = jc, jt
     if not game or query.from_user.id != game.host_id:
         return
     if query.data.startswith("time_"):
@@ -552,33 +388,14 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "Игра создана. Пригласите участников.",
             reply_markup=InlineKeyboardMarkup(invite_buttons),
         )
-        if chat.type != "private":
-            await reply_game_message(
-                query.message,
-                context,
-                "Нажмите, чтобы присоединиться:",
-                reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("Присоединиться", callback_data=f"join_{code}")]]
-                ),
-            )
-            await reply_game_message(
-                query.message,
-                context,
-                "Когда все участники присоединились, перейдите к выбору базового слова",
-            )
 
 
 async def add_player_via_invite(
     user: User,
-    chat_id: int,
-    thread_id: Optional[int],
+    game: GameState,
     context: CallbackContext,
 ) -> None:
     """Helper to add a player to a game via an invite link or code."""
-    game = get_game(chat_id, thread_id or 0)
-    if not game:
-        await context.bot.send_message(user.id, "Игра не найдена")
-        return
     user_id = user.id
     if user_id in game.players:
         await context.bot.send_message(user_id, "Вы уже в игре")
@@ -588,8 +405,6 @@ async def add_player_via_invite(
         return
     game.players[user_id] = Player(user_id=user_id)
     game.player_chats[user_id] = user_id
-    context.user_data["join_chat"] = chat_id
-    context.user_data["join_thread"] = thread_id
     await context.bot.send_message(
         user_id, "Введите ваше имя", reply_markup=ForceReply(selective=True)
     )
@@ -605,12 +420,11 @@ async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not game_id:
         await reply_game_message(update.message, context, "Неверный код")
         return
-    chat_info = get_chat(game_id)
-    if not chat_info:
+    game = ACTIVE_GAMES.get(game_id)
+    if not game:
         await reply_game_message(update.message, context, "Игра не найдена")
         return
-    chat_id, thread_id = chat_info
-    await add_player_via_invite(update.effective_user, chat_id, thread_id, context)
+    await add_player_via_invite(update.effective_user, game, context)
 
 
 async def join_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -621,11 +435,10 @@ async def join_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     game_id = JOIN_CODES.get(join_code)
     if not game_id:
         return
-    chat_info = get_chat(game_id)
-    if not chat_info:
+    game = ACTIVE_GAMES.get(game_id)
+    if not game:
         return
-    chat_id, thread_id = chat_info
-    await add_player_via_invite(query.from_user, chat_id, thread_id, context)
+    await add_player_via_invite(query.from_user, game, context)
 
 
 async def invite_contacts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -695,8 +508,7 @@ async def chat_id_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
 async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
-    thread_id = update.effective_message.message_thread_id
-    game = get_game(chat_id, thread_id or 0)
+    game = get_game(chat_id, None)
     if not game:
         await reply_game_message(update.message, context, "Игра не запущена")
         return
@@ -714,29 +526,9 @@ async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception:
             pass
     await reply_game_message(update.message, context, "Игра прервана")
-    try:
-        await context.bot.close_forum_topic(chat_id, thread_id)
-    except TelegramError:
-        pass
-    key = (chat_id, thread_id or 0)
-    gid = CHAT_GAMES.pop(key, None)
-    if thread_id in (0, None):
-        CHAT_GAMES.pop((chat_id, None), None)
-        CHAT_GAMES.pop((chat_id, 0), None)
-    if gid:
-        ACTIVE_GAMES.pop(gid, None)
-        GAME_CHATS.pop(gid, None)
-        BASE_MSG_IDS.pop(gid, None)
-    game_id = context.application.chat_data.get(chat_id, {}).pop(thread_id, None)
-    summary = (
-        f"Игра #{game_id} прервана и тема закрыта."
-        if game_id
-        else "Игра прервана и тема закрыта."
-    )
-    try:
-        await broadcast(game.game_id, summary)
-    except TelegramError:
-        pass
+    await broadcast(game.game_id, "Игра прервана")
+    BASE_MSG_IDS.pop(game.game_id, None)
+    ACTIVE_GAMES.pop(game.game_id, None)
 
 
 async def base_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -956,32 +748,11 @@ async def end_game(context: CallbackContext) -> None:
             lines.append("🏆 Победители: " + ", ".join(format_name(p) for p in winners))
     message = "\n".join(lines).rstrip()
     await broadcast(game.game_id, message)
-    try:
-        await context.bot.close_forum_topic(chat_id, thread_id)
-    except TelegramError:
-        pass
     for job in game.jobs.values():
         job.schedule_removal()
     game.jobs.clear()
-    key = (chat_id, thread_id or 0)
-    gid = CHAT_GAMES.pop(key, None)
-    if thread_id in (0, None):
-        CHAT_GAMES.pop((chat_id, None), None)
-        CHAT_GAMES.pop((chat_id, 0), None)
-    if gid:
-        ACTIVE_GAMES.pop(gid, None)
-        GAME_CHATS.pop(gid, None)
-        BASE_MSG_IDS.pop(gid, None)
-    game_id = context.application.chat_data.get(chat_id, {}).pop(thread_id, None)
-    summary = (
-        f"Игра #{game_id} завершена, тема закрыта."
-        if game_id
-        else "Игра завершена, тема закрыта."
-    )
-    try:
-        await broadcast(game.game_id, summary)
-    except TelegramError:
-        pass
+    BASE_MSG_IDS.pop(game.game_id, None)
+    ACTIVE_GAMES.pop(game.game_id, None)
 
 
 def reset_game(game: GameState) -> None:
@@ -1024,15 +795,8 @@ async def restart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             reply_markup=InlineKeyboardMarkup(buttons),
         )
     else:
-        key = (chat_id, thread_id or 0)
-        gid = CHAT_GAMES.pop(key, None)
-        if thread_id in (0, None):
-            CHAT_GAMES.pop((chat_id, None), None)
-            CHAT_GAMES.pop((chat_id, 0), None)
-        if gid:
-            ACTIVE_GAMES.pop(gid, None)
-            GAME_CHATS.pop(gid, None)
-            BASE_MSG_IDS.pop(gid, None)
+        BASE_MSG_IDS.pop(game.game_id, None)
+        ACTIVE_GAMES.pop(game.game_id, None)
         await query.edit_message_text("Игра завершена. Для новой игры с новыми участниками нажмите /start")
 
 
@@ -1069,17 +833,11 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             potential = ACTIVE_GAMES.get(gid)
             if potential and user_id in potential.players:
                 game = potential
-                chat_info = get_chat(gid)
-                if chat_info:
-                    chat_id, thread_id = chat_info
                 words_tokens = tokens[1:]
         if not game:
             for g in ACTIVE_GAMES.values():
                 if g.player_chats.get(user_id) == chat_id:
                     game = g
-                    chat_info = get_chat(g.game_id)
-                    if chat_info:
-                        chat_id, thread_id = chat_info
                     break
     if not game or game.status != "running":
         logger.debug(
@@ -1302,8 +1060,6 @@ async def on_startup() -> None:
     BOT_USERNAME = (await APPLICATION.bot.get_me()).username
     # 0) «Кран-тик» — логируем все апдейты как можно раньше
     APPLICATION.add_handler(MessageHandler(filters.ALL, _tap, block=False), group=-2)
-    # 1) служебный хендлер очистки
-    APPLICATION.add_handler(MessageHandler(filters.ALL, clear_home_link_message, block=False), group=-1)
     APPLICATION.add_handler(CommandHandler("start", start_cmd))
     APPLICATION.add_handler(CommandHandler("newgame", newgame))
     APPLICATION.add_handler(CommandHandler("join", join_cmd))
