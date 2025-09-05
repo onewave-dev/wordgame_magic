@@ -751,7 +751,7 @@ async def end_game(context: CallbackContext) -> None:
     if not game:
         return
     game.status = "finished"
-    msg_id = BASE_MSG_IDS.pop(game.game_id, None)
+    msg_id = BASE_MSG_IDS.get(game.game_id)
     if msg_id:
         try:
             await context.bot.delete_message(chat_id, msg_id)
@@ -799,11 +799,13 @@ async def end_game(context: CallbackContext) -> None:
             [
                 InlineKeyboardButton(
                     "Новая игра с теми же участниками", callback_data="restart_yes"
-                ),
+                )
+            ],
+            [
                 InlineKeyboardButton(
                     "Новая игра с другими участниками", callback_data="restart_no"
-                ),
-            ]
+                )
+            ],
         ]
     )
     await broadcast(
@@ -815,8 +817,6 @@ async def end_game(context: CallbackContext) -> None:
         except Exception:
             pass
     game.jobs.clear()
-    BASE_MSG_IDS.pop(game.game_id, None)
-    ACTIVE_GAMES.pop(game.game_id, None)
 
 
 def reset_game(game: GameState) -> None:
@@ -846,6 +846,7 @@ async def restart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
     if query.data == "restart_yes":
         reset_game(game)
+        BASE_MSG_IDS.pop(game.game_id, None)
         await query.edit_message_text("Игра перезапущена.")
         buttons = [
             [
