@@ -50,6 +50,14 @@ def normalize_word(word: str) -> str:
     return word.lower().replace("ё", "е")
 
 
+def bold_alnum(text: str) -> str:
+    """Wrap alphanumeric characters in bold tags for HTML parse mode."""
+    return "".join(
+        f"<b>{html.escape(ch)}</b>" if ch.isalnum() else html.escape(ch)
+        for ch in text
+    )
+
+
 # Load dictionary at startup
 DICT: Set[str] = set()
 for line in DICT_PATH.read_text(encoding="utf-8").splitlines():
@@ -336,7 +344,11 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         game.players[user_id] = player
         context.user_data["name"] = name
         await reply_game_message(update.message, context, f"Имя установлено: {player.name}")
-        await broadcast(game.game_id, f"{player.name} присоединился к игре")
+        await broadcast(
+            game.game_id,
+            f"{bold_alnum(player.name)} присоединился к игре",
+            parse_mode="HTML",
+        )
         host_chat = game.player_chats.get(game.host_id)
         if host_chat:
             await maybe_show_base_options(host_chat, None, context, game)
@@ -345,7 +357,11 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         player.name = name
         context.user_data["name"] = name
         await reply_game_message(update.message, context, f"Имя установлено: {player.name}")
-        await broadcast(game.game_id, f"{player.name} присоединился к игре")
+        await broadcast(
+            game.game_id,
+            f"{bold_alnum(player.name)} присоединился к игре",
+            parse_mode="HTML",
+        )
         if user_id == game.host_id and game.status == "config":
             buttons = [
                 [
@@ -749,11 +765,11 @@ async def set_base_word(chat_id: int, thread_id: int, word: str, context: Callba
     game.base_word = normalize_word(word)
     game.letters = Counter(game.base_word)
     message = (
-        f"{chosen_by} выбрал слово {game.base_word}"
+        f"{bold_alnum(chosen_by)} выбрал слово {html.escape(game.base_word)}"
         if chosen_by
-        else f"Выбрано слово: {game.base_word}"
+        else f"Выбрано слово: {html.escape(game.base_word)}"
     )
-    await broadcast(game.game_id, message)
+    await broadcast(game.game_id, message, parse_mode="HTML")
     await broadcast(
         game.game_id,
         "Нажмите Старт, когда будете готовы",
@@ -954,7 +970,11 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if saved_name and len(game.players) < 5:
             player = Player(user_id=user_id, name=saved_name)
             game.players[user_id] = player
-            await broadcast(game.game_id, f"{saved_name} присоединился к игре")
+            await broadcast(
+                game.game_id,
+                f"{bold_alnum(saved_name)} присоединился к игре",
+                parse_mode="HTML",
+            )
         else:
             await reply_game_message(update.message, context, "Чтобы участвовать, используйте /join")
             logger.debug("player not registered")
