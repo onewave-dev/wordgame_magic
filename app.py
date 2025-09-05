@@ -4,6 +4,7 @@ import os
 import random
 import secrets
 import logging
+import html
 from time import perf_counter
 from collections import Counter
 from dataclasses import dataclass, field
@@ -110,7 +111,7 @@ def get_game(chat_id: int, thread_id: Optional[int]) -> Optional[GameState]:
     return None
 
 
-async def broadcast(game_id: str, text: str, reply_markup=None) -> None:
+async def broadcast(game_id: str, text: str, reply_markup=None, parse_mode=None) -> None:
     """Send a message to all player chats."""
     if not APPLICATION:
         return
@@ -122,7 +123,9 @@ async def broadcast(game_id: str, text: str, reply_markup=None) -> None:
         if cid in sent:
             continue
         try:
-            await APPLICATION.bot.send_message(cid, text, reply_markup=reply_markup)
+            await APPLICATION.bot.send_message(
+                cid, text, reply_markup=reply_markup, parse_mode=parse_mode
+            )
         except TelegramError:
             pass
         sent.add(cid)
@@ -765,20 +768,31 @@ async def end_game(context: CallbackContext) -> None:
     max_score = players_sorted[0].points if players_sorted else 0
     winners = [p for p in players_sorted if p.points == max_score]
 
-    lines = ["Игра окончена! Результаты:", "", f"Слово: {game.base_word.upper()}", ""]
+    lines = [
+        "<b>Игра окончена!</b>",
+        "<b>Результаты:</b>",
+        "",
+        f"<b>Слово:</b> {html.escape(game.base_word.upper())}",
+        "",
+    ]
     for p in players_sorted:
-        lines.append(format_name(p))
+        lines.append(html.escape(format_name(p)))
         for i, w in enumerate(p.words, 1):
             pts = 2 if len(w) >= 6 else 1
-            lines.append(f"{i}. {w} — {pts}")
-        lines.append(f"Результат: {p.points}")
+            lines.append(f"{i}. {html.escape(w)} — {pts}")
+        lines.append(f"<b>Результат:</b> {p.points}")
         lines.append("")
 
     if winners:
         if len(winners) == 1:
-            lines.append(f"🏆 Победитель: {format_name(winners[0])}")
+            lines.append(
+                f"🏆 <b>Победитель:</b> {html.escape(format_name(winners[0]))}"
+            )
         else:
-            lines.append("🏆 Победители: " + ", ".join(format_name(p) for p in winners))
+            lines.append(
+                "🏆 <b>Победители:</b> "
+                + ", ".join(html.escape(format_name(p)) for p in winners)
+            )
     message = "\n".join(lines).rstrip()
     keyboard = InlineKeyboardMarkup(
         [
@@ -792,7 +806,9 @@ async def end_game(context: CallbackContext) -> None:
             ]
         ]
     )
-    await broadcast(game.game_id, message, reply_markup=keyboard)
+    await broadcast(
+        game.game_id, message, reply_markup=keyboard, parse_mode="HTML"
+    )
     for job in list(game.jobs.values()):
         try:
             job.schedule_removal()
