@@ -637,8 +637,10 @@ async def base_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             except Exception:
                 pass
         player = game.players.get(query.from_user.id)
-        chosen_by = player.name if player and player.name else None
-        await set_base_word(chat_id, thread_id, word, context, chosen_by=chosen_by)
+        if not player or not player.name:
+            await request_name(query.from_user.id, chat_id, context)
+            return
+        await set_base_word(chat_id, thread_id, word, context, chosen_by=player.name)
 
 
 async def finish_random(context: CallbackContext) -> None:
@@ -792,6 +794,12 @@ async def end_game(context: CallbackContext) -> None:
     game = get_game(chat_id, thread_id or 0)
     if not game:
         return
+    if any(not p.name for p in game.players.values()):
+        for p in game.players.values():
+            if not p.name:
+                chat = game.player_chats.get(p.user_id, chat_id)
+                await request_name(p.user_id, chat, context)
+        return
     game.status = "finished"
     msg_id = BASE_MSG_IDS.get(game.game_id)
     if msg_id:
@@ -802,7 +810,7 @@ async def end_game(context: CallbackContext) -> None:
     players_sorted = sorted(game.players.values(), key=lambda p: p.points, reverse=True)
 
     def format_name(player: Player) -> str:
-        name = player.name or str(player.user_id)
+        name = player.name
         if player.user_id == 0 or name.lower() in {"bot", "бот"}:
             name = f"🤖 {name}"
         return name
@@ -979,8 +987,11 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await reply_game_message(update.message, context, "Чтобы участвовать, используйте /join")
             logger.debug("player not registered")
             return
+    if not player.name:
+        await request_name(user_id, chat_id, context)
+        return
     words = [normalize_word(w) for w in words_tokens]
-    player_name = player.name or str(user_id)
+    player_name = player.name
     tasks: List = []
 
     async def send_to_user(text: str) -> None:
@@ -1038,7 +1049,7 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             message += "\nБраво! Вы получили 2 очка за это слово. 🤩"
         tasks.append(send_to_user(message))
         if len(w) >= 6:
-            name = player.name or str(user_id)
+            name = player_name
             length = len(w)
             phrases = [
                 f"🔥 {name} жжёт! Прилетело слово из {length} букв.",
@@ -1069,8 +1080,10 @@ async def manual_base_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await reply_game_message(update.message, context, "Неверное слово")
         return
     player = game.players.get(user_id)
-    chosen_by = player.name if player and player.name else None
-    await set_base_word(chat_id, thread_id, word, context, chosen_by=chosen_by)
+    if not player or not player.name:
+        await request_name(user_id, chat_id, context)
+        return
+    await set_base_word(chat_id, thread_id, word, context, chosen_by=player.name)
 
 
 async def bot_move(context: CallbackContext) -> None:
