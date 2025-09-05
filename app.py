@@ -366,15 +366,25 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         game.status = "waiting"
         code = secrets.token_urlsafe(8)
         JOIN_CODES[code] = game.game_id
-        invite_buttons = [
+        await query.edit_message_text("Игра создана. Пригласите участников.")
+        keyboard = ReplyKeyboardMarkup(
             [
-                InlineKeyboardButton("Пригласить из контактов", callback_data="invite_contacts"),
-                InlineKeyboardButton("Создать ссылку", callback_data="invite_link"),
-            ]
-        ]
-        await query.edit_message_text(
-            "Игра создана. Пригласите участников.",
-            reply_markup=InlineKeyboardMarkup(invite_buttons),
+                [
+                    KeyboardButton(
+                        text="Пригласить из контактов",
+                        request_users=KeyboardButtonRequestUsers(request_id=1),
+                    ),
+                    KeyboardButton(text="Создать ссылку"),
+                ]
+            ],
+            resize_keyboard=True,
+            one_time_keyboard=True,
+        )
+        await reply_game_message(
+            query.message,
+            context,
+            "Выберите способ приглашения:",
+            reply_markup=keyboard,
         )
 
 
@@ -429,26 +439,12 @@ async def join_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await add_player_via_invite(query.from_user, game, context)
 
 
-async def invite_contacts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    await query.answer()
-    button = KeyboardButton(
-        text="Выбрать из контактов",
-        request_users=KeyboardButtonRequestUsers(request_id=1),
-    )
-    await reply_game_message(
-        query.message,
-        context,
-        "Выберите контакт:",
-        reply_markup=ReplyKeyboardMarkup([[button]], one_time_keyboard=True, resize_keyboard=True),
-    )
-
-
 async def invite_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    await query.answer()
-    chat_id = query.message.chat.id
-    thread_id = query.message.message_thread_id
+    message = update.message
+    if not message:
+        return
+    chat_id = message.chat.id
+    thread_id = message.message_thread_id
     game = get_game(chat_id, thread_id or 0)
     if not game:
         return
@@ -457,7 +453,7 @@ async def invite_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         code = secrets.token_urlsafe(8)
         JOIN_CODES[code] = game.game_id
     await reply_game_message(
-        query.message,
+        message,
         context,
         f"Ссылка приглашения: https://t.me/{BOT_USERNAME}?start={code}",
     )
@@ -1133,12 +1129,16 @@ async def on_startup() -> None:
     )
     APPLICATION.add_handler(CallbackQueryHandler(time_selected, pattern="^(time_|adm_test)"))
     APPLICATION.add_handler(CallbackQueryHandler(join_button, pattern="^join_"))
-    APPLICATION.add_handler(CallbackQueryHandler(invite_contacts, pattern="^invite_contacts$"))
-    APPLICATION.add_handler(CallbackQueryHandler(invite_link, pattern="^invite_link$"))
     APPLICATION.add_handler(CallbackQueryHandler(base_choice, pattern="^(base_|pick_)", block=False))
     APPLICATION.add_handler(CallbackQueryHandler(start_button, pattern="^start$"))
     APPLICATION.add_handler(CallbackQueryHandler(restart_handler, pattern="^restart_"))
     APPLICATION.add_handler(MessageHandler(filters.StatusUpdate.USERS_SHARED, users_shared_handler))
+    APPLICATION.add_handler(
+        MessageHandler(
+            filters.TEXT & filters.Regex("^Создать ссылку$"),
+            invite_link,
+        )
+    )
     # 2) Поднять основной обработчик слов выше прочих текстовых; он неблокирующий
     APPLICATION.add_handler(
         MessageHandler(filters.TEXT & (~filters.COMMAND), word_message, block=False),
