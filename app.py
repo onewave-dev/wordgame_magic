@@ -131,6 +131,32 @@ async def broadcast(game_id: str, text: str, reply_markup=None, parse_mode=None)
         sent.add(cid)
 
 
+async def broadcast_except_sender(
+    game_id: str,
+    sender_id: int,
+    text: str,
+    reply_markup=None,
+    parse_mode=None,
+) -> None:
+    """Broadcast a message to all players except the sender."""
+    if not APPLICATION:
+        return
+    game = ACTIVE_GAMES.get(game_id)
+    if not game:
+        return
+    sent: Set[int] = set()
+    for uid, cid in game.player_chats.items():
+        if uid == sender_id or cid in sent:
+            continue
+        try:
+            await APPLICATION.bot.send_message(
+                cid, text, reply_markup=reply_markup, parse_mode=parse_mode
+            )
+        except TelegramError:
+            pass
+        sent.add(cid)
+
+
 async def refresh_base_button(chat_id: int, thread_id: int, context: CallbackContext) -> None:
     """Resend base word button to keep it the last message."""
     game = get_game(chat_id, thread_id)
@@ -595,7 +621,7 @@ async def base_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             except Exception:
                 pass
         player = game.players.get(query.from_user.id)
-        chosen_by = player.name if player and player.name else query.from_user.full_name
+        chosen_by = player.name if player and player.name else None
         await set_base_word(chat_id, thread_id, word, context, chosen_by=chosen_by)
 
 
@@ -934,7 +960,7 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             logger.debug("player not registered")
             return
     words = [normalize_word(w) for w in words_tokens]
-    mention = update.effective_user.mention_html()
+    player_name = player.name or str(user_id)
     tasks: List = []
 
     async def send_to_user(text: str) -> None:
@@ -946,26 +972,24 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 chat_id,
                 thread_id,
                 context,
-                f"{mention} {text}",
-                parse_mode="HTML",
+                f"{player_name} {text}",
             )
+            if WORD_CONFIRM_IN_CHAT:
+                await broadcast_except_sender(
+                    game.game_id, user_id, f"{player_name} {text}"
+                )
             if not context.user_data.get("dm_warned"):
                 context.user_data["dm_warned"] = True
                 await send_game_message(
                     chat_id,
                     thread_id,
                     context,
-                    f"{mention} напишите мне в личные сообщения (/start), чтобы получать мгновенную обратную связь.",
-                    parse_mode="HTML",
+                    f"{player_name} напишите мне в личные сообщения (/start), чтобы получать мгновенную обратную связь.",
                 )
         else:
             if WORD_CONFIRM_IN_CHAT:
-                await send_game_message(
-                    chat_id,
-                    thread_id,
-                    context,
-                    f"{mention} {text}",
-                    parse_mode="HTML",
+                await broadcast_except_sender(
+                    game.game_id, user_id, f"{player_name} {text}"
                 )
         logger.debug("send_to_user end %.6f", perf_counter() - start_ts)
 
@@ -994,7 +1018,7 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             message += "\nБраво! Вы получили 2 очка за это слово. 🤩"
         tasks.append(send_to_user(message))
         if len(w) >= 6:
-            name = player.name if player.name else update.effective_user.full_name
+            name = player.name or str(user_id)
             length = len(w)
             phrases = [
                 f"🔥 {name} жжёт! Прилетело слово из {length} букв.",
@@ -1025,7 +1049,7 @@ async def manual_base_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await reply_game_message(update.message, context, "Неверное слово")
         return
     player = game.players.get(user_id)
-    chosen_by = player.name if player and player.name else update.effective_user.full_name
+    chosen_by = player.name if player and player.name else None
     await set_base_word(chat_id, thread_id, word, context, chosen_by=chosen_by)
 
 
