@@ -251,6 +251,5 @@ uvicorn[standard]>=0.30
 - `ADMIN_ID` — Telegram ID администратора  
 - `TELEGRAM_BOT_TOKEN` — токен от @BotFather  
 - `PUBLIC_URL` — публичный HTTPS-URL  
-- `WEBHOOK_SECRET` — длинная случайная строка  
-- `WEBHOOK_PATH` — (опц.) путь вебхука, по умолчанию `/webhook`  
-- `WORD_CONFIRM_IN_CHAT` — (опц.) `1`, чтобы дублировать подтверждение слова в личках у всех игроков  
+- `WEBHOOK_SECRET` — длинная случайная строка
+- `WEBHOOK_PATH` — (опц.) путь вебхука, по умолчанию `/webhook`
