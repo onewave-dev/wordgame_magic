@@ -1059,15 +1059,21 @@ async def manual_base_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     thread_id = update.effective_message.message_thread_id
     user_id = update.effective_user.id
     game = get_game(chat_id, thread_id or 0)
-    if not game or user_id != game.host_id or game.base_word:
-        return
-    word = normalize_word(update.message.text)
-    if len(word) < 8 or word not in DICT:
-        await reply_game_message(update.message, context, "Неверное слово")
+    if (
+        not game
+        or user_id != game.host_id
+        or game.base_word
+        or not update.message.reply_to_message
+        or update.message.reply_to_message.from_user.id != context.bot.id
+    ):
         return
     player = game.players.get(user_id)
     if not player or not player.name:
         await request_name(user_id, chat_id, context)
+        return
+    word = normalize_word(update.message.text)
+    if len(word) < 8 or word not in DICT:
+        await reply_game_message(update.message, context, "Неверное слово")
         return
     await set_base_word(chat_id, thread_id, word, context, chosen_by=player.name)
 
