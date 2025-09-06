@@ -245,7 +245,6 @@ async def request_name(user_id: int, chat_id: int, context: CallbackContext) -> 
         None,
         context,
         "Введите ваше имя",
-        reply_markup=ForceReply(selective=True),
     )
 
 
@@ -305,8 +304,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     game.player_chats[user_id] = chat.id
     player = game.players.get(user_id)
-    # Ignore non-reply messages from players who already have a name
-    if player and player.name and update.message.reply_to_message is None:
+    if player and player.name:
         return
     name = update.message.text.strip()
     if not player:
@@ -326,7 +324,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if host_chat:
             await maybe_show_base_options(host_chat, None, context, game)
         raise ApplicationHandlerStop
-    if not player.name:
+    elif not player.name:
         player.name = name
         context.user_data["name"] = name
         await reply_game_message(update.message, context, f"Имя установлено: {player.name}")
@@ -379,6 +377,10 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     if not game or query.from_user.id != game.host_id:
         return
+    player = game.players.get(query.from_user.id)
+    if not player or not player.name:
+        await request_name(query.from_user.id, chat_id, context)
+        return
     if query.data.startswith("time_"):
         game.time_limit = int(query.data.split("_")[1])
         game.status = "waiting"
@@ -421,9 +423,7 @@ async def add_player_via_invite(
         return
     game.players[user_id] = Player(user_id=user_id)
     game.player_chats[user_id] = user_id
-    await context.bot.send_message(
-        user_id, "Введите ваше имя", reply_markup=ForceReply(selective=True)
-    )
+    await context.bot.send_message(user_id, "Введите ваше имя")
 
 
 async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -544,6 +544,10 @@ async def base_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     game = get_game(chat_id, thread_id or 0)
     if not game:
         return
+    player = game.players.get(query.from_user.id)
+    if not player or not player.name:
+        await request_name(query.from_user.id, chat_id, context)
+        return
 
     # Only the host may request random/manual base word options
     if query.data in {"base_manual", "base_random"} and query.from_user.id != game.host_id:
@@ -609,10 +613,6 @@ async def base_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 job.schedule_removal()
             except Exception:
                 pass
-        player = game.players.get(query.from_user.id)
-        if not player or not player.name:
-            await request_name(query.from_user.id, chat_id, context)
-            return
         await set_base_word(chat_id, thread_id, word, context, chosen_by=player.name)
 
 
@@ -1087,6 +1087,9 @@ async def handle_submission(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     player = game.players.get(user.id)
     if not player:
         return
+    if not player.name:
+        await request_name(user.id, chat_id, context)
+        return
     words = [normalize_word(w) for w in message.text.split()]
     handled = False
     for w in words:
@@ -1160,10 +1163,9 @@ async def on_startup() -> None:
     APPLICATION.add_handler(CommandHandler("join", join_cmd))
     APPLICATION.add_handler(CommandHandler(["quit", "exit"], quit_cmd))
     APPLICATION.add_handler(CommandHandler("chatid", chat_id_handler))
-    # handle_name — только ответы на ForceReply, в отдельной группе
     APPLICATION.add_handler(
-        MessageHandler(filters.REPLY & filters.TEXT & (~filters.COMMAND), handle_name),
-        group=1,
+        MessageHandler(filters.TEXT & (~filters.COMMAND), handle_name, block=False),
+        group=0,
     )
     APPLICATION.add_handler(CallbackQueryHandler(time_selected, pattern="^(time_|adm_test)"))
     APPLICATION.add_handler(CallbackQueryHandler(join_button, pattern="^join_"))
