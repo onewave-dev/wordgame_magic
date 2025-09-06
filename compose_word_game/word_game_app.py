@@ -39,8 +39,9 @@ from telegram.error import TelegramError
 
 # --- Utilities --------------------------------------------------------------
 
-DICT_PATH = Path(__file__).with_name("nouns_ru_pymorphy2_yaspeller.jsonl")
-WHITELIST_PATH = Path(__file__).with_name("whitelist.jsonl")
+BASE_DIR = Path(__file__).resolve().parent.parent
+DICT_PATH = BASE_DIR / "nouns_ru_pymorphy2_yaspeller.jsonl"
+WHITELIST_PATH = BASE_DIR / "whitelist.jsonl"
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=LOG_LEVEL)

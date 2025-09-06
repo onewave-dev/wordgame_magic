@@ -38,6 +38,7 @@
    ```
    uvicorn app:app --host 0.0.0.0 --port 8000
    ```
+   (корневой `app.py` лишь переэкспортирует `compose_word_game.word_game_app:app`)
 4. Для вебхука нужен туннель (ngrok / cloudflared).
    Установите `PUBLIC_URL` и вызовите:
    ```
