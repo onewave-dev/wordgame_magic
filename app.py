@@ -139,32 +139,6 @@ async def broadcast(game_id: str, text: str, reply_markup=None, parse_mode=None)
         sent.add(cid)
 
 
-async def broadcast_except_sender(
-    game_id: str,
-    sender_id: int,
-    text: str,
-    reply_markup=None,
-    parse_mode=None,
-) -> None:
-    """Broadcast a message to all players except the sender."""
-    if not APPLICATION:
-        return
-    game = ACTIVE_GAMES.get(game_id)
-    if not game:
-        return
-    sent: Set[int] = set()
-    for uid, cid in game.player_chats.items():
-        if uid == sender_id or cid in sent:
-            continue
-        try:
-            await APPLICATION.bot.send_message(
-                cid, text, reply_markup=reply_markup, parse_mode=parse_mode
-            )
-        except TelegramError:
-            pass
-        sent.add(cid)
-
-
 async def refresh_base_button(chat_id: int, thread_id: int, context: CallbackContext) -> None:
     """Resend base word button to keep it the last message."""
     game = get_game(chat_id, thread_id)
@@ -246,7 +220,6 @@ TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 PUBLIC_URL = os.environ.get("PUBLIC_URL")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", secrets.token_hex())
 WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "/webhook")
-WORD_CONFIRM_IN_CHAT = os.environ.get("WORD_CONFIRM_IN_CHAT") == "1"
 
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1005,10 +978,6 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 context,
                 f"{player_name} {text}",
             )
-            if WORD_CONFIRM_IN_CHAT:
-                await broadcast_except_sender(
-                    game.game_id, user_id, f"{player_name} {text}"
-                )
             if not context.user_data.get("dm_warned"):
                 context.user_data["dm_warned"] = True
                 await send_game_message(
@@ -1016,11 +985,6 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     thread_id,
                     context,
                     f"{player_name} напишите мне в личные сообщения (/start), чтобы получать мгновенную обратную связь.",
-                )
-        else:
-            if WORD_CONFIRM_IN_CHAT:
-                await broadcast_except_sender(
-                    game.game_id, user_id, f"{player_name} {text}"
                 )
         logger.debug("send_to_user end %.6f", perf_counter() - start_ts)
 
