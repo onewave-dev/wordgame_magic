@@ -228,6 +228,7 @@ WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "/webhook")
 
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
     code = context.args[0] if context.args else None
     if code and code in JOIN_CODES:
         gid = JOIN_CODES[code]
@@ -235,12 +236,13 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if game:
             await add_player_via_invite(update.effective_user, game, context)
         else:
-            await reply_game_message(update.message, context, "Игра не найдена")
+            if message:
+                await reply_game_message(message, context, "Игра не найдена")
         return
     user = update.effective_user
     game = create_dm_game(user.id)
-    if update.message:
-        await reply_game_message(update.message, context, f"Игра #{game.game_id} создана")
+    if message:
+        await reply_game_message(message, context, f"Игра #{game.game_id} создана")
     await request_name(user.id, update.effective_chat.id, context)
 
 
@@ -1171,45 +1173,45 @@ async def webhook_check(context: CallbackContext) -> None:
     else:
         logger.info("Webhook is up-to-date: %s", info.url)
 
-@app.on_event("startup")
-async def on_startup() -> None:
-    global APPLICATION, BOT_USERNAME
-    APPLICATION = Application.builder().token(TOKEN).build()
-    BOT_USERNAME = (await APPLICATION.bot.get_me()).username
+def register_handlers(application: Application, include_start: bool = False) -> None:
+    """Register compose-word-game handlers on the given application."""
+    global APPLICATION
+    APPLICATION = application
     # 0) «Кран-тик» — логируем все апдейты как можно раньше
-    APPLICATION.add_handler(MessageHandler(filters.ALL, _tap, block=False), group=-2)
-    APPLICATION.add_handler(CommandHandler("start", start_cmd))
-    APPLICATION.add_handler(CommandHandler("newgame", newgame))
-    APPLICATION.add_handler(CommandHandler("join", join_cmd))
-    APPLICATION.add_handler(CommandHandler(["quit", "exit"], quit_cmd))
-    APPLICATION.add_handler(CommandHandler("chatid", chat_id_handler))
-    APPLICATION.add_handler(
+    application.add_handler(MessageHandler(filters.ALL, _tap, block=False), group=-2)
+    if include_start:
+        application.add_handler(CommandHandler("start", start_cmd))
+    application.add_handler(CommandHandler("newgame", newgame))
+    application.add_handler(CommandHandler("join", join_cmd))
+    application.add_handler(CommandHandler(["quit", "exit"], quit_cmd))
+    application.add_handler(CommandHandler("chatid", chat_id_handler))
+    application.add_handler(
         MessageHandler(filters.TEXT & (~filters.COMMAND), handle_name, block=False),
         group=0,
     )
-    APPLICATION.add_handler(CallbackQueryHandler(time_selected, pattern="^(time_|adm_test)"))
-    APPLICATION.add_handler(CallbackQueryHandler(join_button, pattern="^join_"))
-    APPLICATION.add_handler(CallbackQueryHandler(base_choice, pattern="^(base_|pick_)", block=False))
-    APPLICATION.add_handler(CallbackQueryHandler(start_button, pattern="^start$"))
-    APPLICATION.add_handler(CallbackQueryHandler(restart_handler, pattern="^restart_"))
-    APPLICATION.add_handler(MessageHandler(filters.StatusUpdate.USERS_SHARED, users_shared_handler))
-    APPLICATION.add_handler(
+    application.add_handler(CallbackQueryHandler(time_selected, pattern="^(time_|adm_test)"))
+    application.add_handler(CallbackQueryHandler(join_button, pattern="^join_"))
+    application.add_handler(CallbackQueryHandler(base_choice, pattern="^(base_|pick_)", block=False))
+    application.add_handler(CallbackQueryHandler(start_button, pattern="^start$"))
+    application.add_handler(CallbackQueryHandler(restart_handler, pattern="^restart_"))
+    application.add_handler(MessageHandler(filters.StatusUpdate.USERS_SHARED, users_shared_handler))
+    application.add_handler(
         MessageHandler(
             filters.TEXT & filters.Regex("^Создать ссылку$"),
             invite_link,
         )
     )
     # 2) Поднять основной обработчик слов выше прочих текстовых; он неблокирующий
-    APPLICATION.add_handler(
+    application.add_handler(
         MessageHandler(filters.TEXT & (~filters.COMMAND), word_message, block=False),
         group=1,
     )
     # Остальные текстовые — ниже
-    APPLICATION.add_handler(
+    application.add_handler(
         MessageHandler(filters.TEXT & (~filters.COMMAND), manual_base_word, block=False),
         group=2,
     )
-    APPLICATION.add_handler(
+    application.add_handler(
         MessageHandler(
             filters.ChatType.PRIVATE & ~filters.COMMAND,
             handle_submission,
@@ -1217,9 +1219,15 @@ async def on_startup() -> None:
         ),
         group=2,
     )
-    # (раньше мы регистрировали word_message здесь; перенесено выше)
-    
-    
+
+
+@app.on_event("startup")
+async def on_startup() -> None:
+    global APPLICATION, BOT_USERNAME
+    APPLICATION = Application.builder().token(TOKEN).build()
+    BOT_USERNAME = (await APPLICATION.bot.get_me()).username
+    register_handlers(APPLICATION, include_start=True)
+
     await APPLICATION.initialize()
     await APPLICATION.start()
     if APPLICATION.job_queue:
