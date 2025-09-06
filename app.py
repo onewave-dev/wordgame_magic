@@ -56,7 +56,7 @@ async def choose_game(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if "grebeshok" not in REGISTERED_GAMES:
             grebeshok_game.register_handlers(APPLICATION)
             REGISTERED_GAMES.add("grebeshok")
-        await grebeshok_game.start_cmd(update, context)
+        await grebeshok_game.newgame(update, context)
     try:
         await query.edit_message_reply_markup(None)
     except Exception:

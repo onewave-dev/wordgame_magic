@@ -184,22 +184,22 @@ async def broadcast(game: GameState, text: str, context: CallbackContext) -> Non
 
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Instructional start command."""
-    if update.message:
-        await update.message.reply_text("Используйте /newgame для начала игры")
+    """Entry point for ``/start``: immediately begin a new game."""
+    await newgame(update, context)
 
 
 async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Host starts a new game."""
 
     chat = update.effective_chat
+    message = update.effective_message
     if chat.type != "private":
-        await update.message.reply_text("Запускать игру нужно в личном чате с ботом.")
+        await message.reply_text("Запускать игру нужно в личном чате с ботом.")
         return
 
-    gid = game_key(chat.id, update.message.message_thread_id)
+    gid = game_key(chat.id, message.message_thread_id)
     if gid in ACTIVE_GAMES:
-        await update.message.reply_text("Игра уже создана.")
+        await message.reply_text("Игра уже создана.")
         return
 
     host_id = update.effective_user.id
@@ -212,8 +212,8 @@ async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     JOIN_CODES[code] = gid
 
     context.user_data["awaiting_name"] = True
-    await update.message.reply_text(
-        "Игра создана. Код для приглашения: {}\nВведите ваше имя:".format(code)
+    await message.reply_text(
+        f"Игра создана. Код для приглашения: {code}\nВведите ваше имя:"
     )
 
 
