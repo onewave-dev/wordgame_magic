@@ -904,8 +904,14 @@ async def restart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     start_ts = perf_counter()
-    # подробный входной лог
+    # временный INFO-лог для подтверждения запуска обработчика
     try:
+        logger.info(
+            "word_message START chat_id=%s user=%s text=%r",
+            update.effective_chat.id if update.effective_chat else None,
+            update.effective_user.id if update.effective_user else None,
+            update.effective_message.text if update.effective_message else None,
+        )
         logger.debug(
             "word_message ENTER chat_id=%s type=%s thread=%s user=%s text=%r",
             update.effective_chat.id if update.effective_chat else None,
