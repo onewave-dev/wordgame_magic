@@ -4,6 +4,7 @@ import os
 import random
 import secrets
 import logging
+import html
 from time import perf_counter
 from collections import Counter
 from dataclasses import dataclass, field
@@ -47,6 +48,14 @@ logger = logging.getLogger(__name__)
 def normalize_word(word: str) -> str:
     """Normalize words: lowercase and replace ё with е."""
     return word.lower().replace("ё", "е")
+
+
+def bold_alnum(text: str) -> str:
+    """Wrap alphanumeric characters in bold tags for HTML parse mode."""
+    return "".join(
+        f"<b>{html.escape(ch)}</b>" if ch.isalnum() else html.escape(ch)
+        for ch in text
+    )
 
 
 # Load dictionary at startup
@@ -110,7 +119,7 @@ def get_game(chat_id: int, thread_id: Optional[int]) -> Optional[GameState]:
     return None
 
 
-async def broadcast(game_id: str, text: str, reply_markup=None) -> None:
+async def broadcast(game_id: str, text: str, reply_markup=None, parse_mode=None) -> None:
     """Send a message to all player chats."""
     if not APPLICATION:
         return
@@ -122,7 +131,9 @@ async def broadcast(game_id: str, text: str, reply_markup=None) -> None:
         if cid in sent:
             continue
         try:
-            await APPLICATION.bot.send_message(cid, text, reply_markup=reply_markup)
+            await APPLICATION.bot.send_message(
+                cid, text, reply_markup=reply_markup, parse_mode=parse_mode
+            )
         except TelegramError:
             pass
         sent.add(cid)
@@ -209,7 +220,6 @@ TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 PUBLIC_URL = os.environ.get("PUBLIC_URL")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", secrets.token_hex())
 WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "/webhook")
-WORD_CONFIRM_IN_CHAT = os.environ.get("WORD_CONFIRM_IN_CHAT") == "1"
 
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -307,7 +317,11 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         game.players[user_id] = player
         context.user_data["name"] = name
         await reply_game_message(update.message, context, f"Имя установлено: {player.name}")
-        await broadcast(game.game_id, f"{player.name} присоединился к игре")
+        await broadcast(
+            game.game_id,
+            f"{bold_alnum(player.name)} присоединился к игре",
+            parse_mode="HTML",
+        )
         host_chat = game.player_chats.get(game.host_id)
         if host_chat:
             await maybe_show_base_options(host_chat, None, context, game)
@@ -316,7 +330,11 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         player.name = name
         context.user_data["name"] = name
         await reply_game_message(update.message, context, f"Имя установлено: {player.name}")
-        await broadcast(game.game_id, f"{player.name} присоединился к игре")
+        await broadcast(
+            game.game_id,
+            f"{bold_alnum(player.name)} присоединился к игре",
+            parse_mode="HTML",
+        )
         if user_id == game.host_id and game.status == "config":
             buttons = [
                 [
@@ -592,8 +610,10 @@ async def base_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             except Exception:
                 pass
         player = game.players.get(query.from_user.id)
-        chosen_by = player.name if player and player.name else query.from_user.full_name
-        await set_base_word(chat_id, thread_id, word, context, chosen_by=chosen_by)
+        if not player or not player.name:
+            await request_name(query.from_user.id, chat_id, context)
+            return
+        await set_base_word(chat_id, thread_id, word, context, chosen_by=player.name)
 
 
 async def finish_random(context: CallbackContext) -> None:
@@ -720,11 +740,11 @@ async def set_base_word(chat_id: int, thread_id: int, word: str, context: Callba
     game.base_word = normalize_word(word)
     game.letters = Counter(game.base_word)
     message = (
-        f"{chosen_by} выбрал слово {game.base_word}"
+        f"{bold_alnum(chosen_by)} выбрал слово {html.escape(game.base_word)}"
         if chosen_by
-        else f"Выбрано слово: {game.base_word}"
+        else f"Выбрано слово: {html.escape(game.base_word)}"
     )
-    await broadcast(game.game_id, message)
+    await broadcast(game.game_id, message, parse_mode="HTML")
     await broadcast(
         game.game_id,
         "Нажмите Старт, когда будете готовы",
@@ -747,8 +767,14 @@ async def end_game(context: CallbackContext) -> None:
     game = get_game(chat_id, thread_id or 0)
     if not game:
         return
+    if any(not p.name for p in game.players.values()):
+        for p in game.players.values():
+            if not p.name:
+                chat = game.player_chats.get(p.user_id, chat_id)
+                await request_name(p.user_id, chat, context)
+        return
     game.status = "finished"
-    msg_id = BASE_MSG_IDS.pop(game.game_id, None)
+    msg_id = BASE_MSG_IDS.get(game.game_id)
     if msg_id:
         try:
             await context.bot.delete_message(chat_id, msg_id)
@@ -757,7 +783,7 @@ async def end_game(context: CallbackContext) -> None:
     players_sorted = sorted(game.players.values(), key=lambda p: p.points, reverse=True)
 
     def format_name(player: Player) -> str:
-        name = player.name or str(player.user_id)
+        name = player.name
         if player.user_id == 0 or name.lower() in {"bot", "бот"}:
             name = f"🤖 {name}"
         return name
@@ -765,42 +791,55 @@ async def end_game(context: CallbackContext) -> None:
     max_score = players_sorted[0].points if players_sorted else 0
     winners = [p for p in players_sorted if p.points == max_score]
 
-    lines = ["Игра окончена! Результаты:", "", f"Слово: {game.base_word.upper()}", ""]
+    lines = [
+        "<b>Игра окончена!</b>",
+        "<b>Результаты:</b>",
+        "",
+        f"<b>Слово:</b> {html.escape(game.base_word.upper())}",
+        "",
+    ]
     for p in players_sorted:
-        lines.append(format_name(p))
+        lines.append(html.escape(format_name(p)))
         for i, w in enumerate(p.words, 1):
             pts = 2 if len(w) >= 6 else 1
-            lines.append(f"{i}. {w} — {pts}")
-        lines.append(f"Результат: {p.points}")
+            lines.append(f"{i}. {html.escape(w)} — {pts}")
+        lines.append(f"<b>Результат:</b> {p.points}")
         lines.append("")
 
     if winners:
         if len(winners) == 1:
-            lines.append(f"🏆 Победитель: {format_name(winners[0])}")
+            lines.append(
+                f"🏆 <b>Победитель:</b> {html.escape(format_name(winners[0]))}"
+            )
         else:
-            lines.append("🏆 Победители: " + ", ".join(format_name(p) for p in winners))
+            lines.append(
+                "🏆 <b>Победители:</b> "
+                + ", ".join(html.escape(format_name(p)) for p in winners)
+            )
     message = "\n".join(lines).rstrip()
     keyboard = InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
                     "Новая игра с теми же участниками", callback_data="restart_yes"
-                ),
+                )
+            ],
+            [
                 InlineKeyboardButton(
                     "Новая игра с другими участниками", callback_data="restart_no"
-                ),
-            ]
+                )
+            ],
         ]
     )
-    await broadcast(game.game_id, message, reply_markup=keyboard)
+    await broadcast(
+        game.game_id, message, reply_markup=keyboard, parse_mode="HTML"
+    )
     for job in list(game.jobs.values()):
         try:
             job.schedule_removal()
         except Exception:
             pass
     game.jobs.clear()
-    BASE_MSG_IDS.pop(game.game_id, None)
-    ACTIVE_GAMES.pop(game.game_id, None)
 
 
 def reset_game(game: GameState) -> None:
@@ -830,6 +869,7 @@ async def restart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
     if query.data == "restart_yes":
         reset_game(game)
+        BASE_MSG_IDS.pop(game.game_id, None)
         await query.edit_message_text("Игра перезапущена.")
         buttons = [
             [
@@ -911,13 +951,20 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if saved_name and len(game.players) < 5:
             player = Player(user_id=user_id, name=saved_name)
             game.players[user_id] = player
-            await broadcast(game.game_id, f"{saved_name} присоединился к игре")
+            await broadcast(
+                game.game_id,
+                f"{bold_alnum(saved_name)} присоединился к игре",
+                parse_mode="HTML",
+            )
         else:
             await reply_game_message(update.message, context, "Чтобы участвовать, используйте /join")
             logger.debug("player not registered")
             return
+    if not player.name:
+        await request_name(user_id, chat_id, context)
+        return
     words = [normalize_word(w) for w in words_tokens]
-    mention = update.effective_user.mention_html()
+    player_name = player.name
     tasks: List = []
 
     async def send_to_user(text: str) -> None:
@@ -929,8 +976,7 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 chat_id,
                 thread_id,
                 context,
-                f"{mention} {text}",
-                parse_mode="HTML",
+                f"{player_name} {text}",
             )
             if not context.user_data.get("dm_warned"):
                 context.user_data["dm_warned"] = True
@@ -938,17 +984,7 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     chat_id,
                     thread_id,
                     context,
-                    f"{mention} напишите мне в личные сообщения (/start), чтобы получать мгновенную обратную связь.",
-                    parse_mode="HTML",
-                )
-        else:
-            if WORD_CONFIRM_IN_CHAT:
-                await send_game_message(
-                    chat_id,
-                    thread_id,
-                    context,
-                    f"{mention} {text}",
-                    parse_mode="HTML",
+                    f"{player_name} напишите мне в личные сообщения (/start), чтобы получать мгновенную обратную связь.",
                 )
         logger.debug("send_to_user end %.6f", perf_counter() - start_ts)
 
@@ -977,7 +1013,7 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             message += "\nБраво! Вы получили 2 очка за это слово. 🤩"
         tasks.append(send_to_user(message))
         if len(w) >= 6:
-            name = player.name if player.name else update.effective_user.full_name
+            name = player_name
             length = len(w)
             phrases = [
                 f"🔥 {name} жжёт! Прилетело слово из {length} букв.",
@@ -1008,8 +1044,10 @@ async def manual_base_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await reply_game_message(update.message, context, "Неверное слово")
         return
     player = game.players.get(user_id)
-    chosen_by = player.name if player and player.name else update.effective_user.full_name
-    await set_base_word(chat_id, thread_id, word, context, chosen_by=chosen_by)
+    if not player or not player.name:
+        await request_name(user_id, chat_id, context)
+        return
+    await set_base_word(chat_id, thread_id, word, context, chosen_by=player.name)
 
 
 async def bot_move(context: CallbackContext) -> None:
