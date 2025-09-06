@@ -1193,18 +1193,20 @@ async def on_startup() -> None:
     # 2) Поднять основной обработчик слов выше прочих текстовых; он неблокирующий
     APPLICATION.add_handler(
         MessageHandler(filters.TEXT & (~filters.COMMAND), word_message, block=False),
-        group=0
+        group=1,
     )
     # Остальные текстовые — ниже
     APPLICATION.add_handler(
-        MessageHandler(filters.TEXT & (~filters.COMMAND), manual_base_word, block=False)
+        MessageHandler(filters.TEXT & (~filters.COMMAND), manual_base_word, block=False),
+        group=2,
     )
     APPLICATION.add_handler(
         MessageHandler(
             filters.ChatType.PRIVATE & ~filters.COMMAND,
             handle_submission,
             block=False,
-        )
+        ),
+        group=2,
     )
     # (раньше мы регистрировали word_message здесь; перенесено выше)
     
