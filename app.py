@@ -40,6 +40,7 @@ from telegram.error import TelegramError
 # --- Utilities --------------------------------------------------------------
 
 DICT_PATH = Path(__file__).with_name("nouns_ru_pymorphy2_yaspeller.jsonl")
+WHITELIST_PATH = Path(__file__).with_name("whitelist.jsonl")
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=LOG_LEVEL)
@@ -58,14 +59,17 @@ def bold_alnum(text: str) -> str:
     )
 
 
-# Load dictionary at startup
+# Load dictionary at startup (main + whitelist)
 DICT: Set[str] = set()
-for line in DICT_PATH.read_text(encoding="utf-8").splitlines():
-    try:
-        data = json.loads(line)
-        DICT.add(normalize_word(data["word"]))
-    except Exception:
+for path in (DICT_PATH, WHITELIST_PATH):
+    if not path.exists():
         continue
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            data = json.loads(line)
+            DICT.add(normalize_word(data["word"]))
+        except Exception:
+            continue
 
 
 def is_cyrillic(word: str) -> bool:
