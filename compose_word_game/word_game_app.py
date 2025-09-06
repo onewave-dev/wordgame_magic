@@ -389,8 +389,17 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if query.data.startswith("time_"):
         game.time_limit = int(query.data.split("_")[1])
         game.status = "waiting"
-        code = secrets.token_urlsafe(8)
-        JOIN_CODES[code] = game.game_id
+        if len(game.players) >= 2 and all(p.name for p in game.players.values()):
+            code = next((c for c, gid in JOIN_CODES.items() if gid == game.game_id), None)
+            if code:
+                JOIN_CODES.pop(code, None)
+            await query.edit_message_text("Длительность установлена")
+            await maybe_show_base_options(chat_id, thread_id, context, game)
+            return
+        code = next((c for c, gid in JOIN_CODES.items() if gid == game.game_id), None)
+        if not code:
+            code = secrets.token_urlsafe(8)
+            JOIN_CODES[code] = game.game_id
         await query.edit_message_text("Игра создана. Пригласите участников.")
         keyboard = ReplyKeyboardMarkup(
             [
