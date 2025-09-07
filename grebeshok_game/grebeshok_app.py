@@ -57,6 +57,7 @@ PUBLIC_URL = os.environ.get("PUBLIC_URL", "")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "/webhook")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
+MESSAGE_RATE_LIMIT = float(os.environ.get("MESSAGE_RATE_LIMIT", "1"))
 
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
@@ -707,6 +708,15 @@ async def dummy_bot_word(context: CallbackContext) -> None:
 
 
 async def handle_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    now = asyncio.get_running_loop().time()
+    last_time = context.user_data.get("last_message_time")
+    if last_time and now - last_time < MESSAGE_RATE_LIMIT:
+        await update.message.reply_text("Слишком часто! Подождите немного.")
+        context.user_data["last_message_time"] = now
+        logger.debug("Rate limit hit for user %s", update.effective_user.id)
+        return
+    context.user_data["last_message_time"] = now
+
     text = update.message.text.lower().replace("ё", "е")
     words = text.split()
     if not words:
