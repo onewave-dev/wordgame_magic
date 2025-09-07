@@ -27,6 +27,7 @@ import logging
 import os
 import random
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -56,6 +57,7 @@ PUBLIC_URL = os.environ.get("PUBLIC_URL", "")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "/webhook")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
+RATE_LIMIT_SECONDS = float(os.getenv("RATE_LIMIT_SECONDS", "1"))
 
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
@@ -533,7 +535,15 @@ async def handle_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         "missing_letters": "Слово не содержит все буквы",
         "used_by_you": "Вы уже использовали это слово",
         "used_by_other": "Слово уже использовано другим игроком",
+        "rate_limited": "Слишком быстро: максимум одно сообщение в секунду",
     }
+
+    now = time.monotonic()
+    last_time = context.user_data.get("last_message_time")
+    if last_time and now - last_time < RATE_LIMIT_SECONDS:
+        await update.message.reply_text(responses["rate_limited"])
+        return
+    context.user_data["last_message_time"] = now
 
     text = update.message.text.lower().replace("ё", "е")
     if not re.fullmatch(r"[а-я]+", text):
