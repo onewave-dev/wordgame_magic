@@ -142,6 +142,10 @@ JOIN_CODES: Dict[str, Tuple[int, int]] = {}
 # Finished games stored for quick restart
 FINISHED_GAMES: Dict[Tuple[int, int], GameState] = {}
 
+# Message IDs for base letters buttons and throttling timestamps
+BASE_MSG_IDS: Dict[Tuple[int, int], int] = {}
+LAST_REFRESH: Dict[Tuple[int, int], float] = {}
+
 
 def game_key(chat_id: int, thread_id: Optional[int]) -> Tuple[int, int]:
     return (chat_id, thread_id or 0)
@@ -187,6 +191,7 @@ async def broadcast(
     context: CallbackContext,
     reply_markup=None,
     parse_mode: Optional[str] = None,
+    refresh: bool = True,
 ) -> None:
     for uid in list(game.players.keys()):
         chat_id = game.player_chats.get(uid)
@@ -195,8 +200,83 @@ async def broadcast(
                 await context.bot.send_message(
                     chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode
                 )
+                if refresh:
+                    schedule_refresh_base_letters(chat_id, 0, context)
             except Exception as exc:  # pragma: no cover - network issues
                 logger.warning("Broadcast to %s failed: %s", chat_id, exc)
+
+
+async def refresh_base_letters_button(
+    chat_id: int, thread_id: int, context: CallbackContext
+) -> None:
+    """Resend base letters button to keep it the last message."""
+
+    game = get_game(chat_id, thread_id)
+    if (
+        not game
+        or game.status not in {"choosing", "running"}
+        or not game.base_letters
+    ):
+        return
+    key = (chat_id, thread_id)
+    msg_id = BASE_MSG_IDS.get(key)
+    if msg_id:
+        try:
+            await context.bot.delete_message(chat_id, msg_id)
+        except Exception:
+            pass
+    letters = " • ".join(ch.upper() for ch in game.base_letters)
+    msg = await context.bot.send_message(
+        chat_id,
+        "Используйте буквы:",
+        reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton(letters, callback_data="noop")]]
+        ),
+        message_thread_id=thread_id or None,
+    )
+    BASE_MSG_IDS[key] = msg.message_id
+    LAST_REFRESH[key] = asyncio.get_event_loop().time()
+
+
+def schedule_refresh_base_letters(
+    chat_id: int, thread_id: int, context: CallbackContext
+) -> None:
+    """Throttle refresh of the base letters button."""
+
+    now = asyncio.get_event_loop().time()
+    key = (chat_id, thread_id)
+    last = LAST_REFRESH.get(key, 0)
+    if now - last < 1:
+        return
+    LAST_REFRESH[key] = now
+    asyncio.create_task(refresh_base_letters_button(chat_id, thread_id, context))
+
+
+async def send_game_message(
+    chat_id: int,
+    thread_id: Optional[int],
+    context: CallbackContext,
+    text: str,
+    **kwargs,
+):
+    """Wrapper for ``send_message`` that schedules base letters refresh."""
+
+    if thread_id is None:
+        msg = await context.bot.send_message(chat_id, text, **kwargs)
+    else:
+        msg = await context.bot.send_message(
+            chat_id, text, message_thread_id=thread_id, **kwargs
+        )
+    schedule_refresh_base_letters(chat_id, thread_id or 0, context)
+    return msg
+
+
+async def reply_game_message(message, context: CallbackContext, text: str, **kwargs):
+    msg = await message.reply_text(text, **kwargs)
+    schedule_refresh_base_letters(
+        message.chat_id, message.message_thread_id or 0, context
+    )
+    return msg
 
 
 # ---------------------------------------------------------------------------
@@ -222,12 +302,12 @@ async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat = update.effective_chat
     message = update.effective_message
     if chat.type != "private":
-        await message.reply_text("Запускать игру нужно в личном чате с ботом.")
+        await reply_game_message(message, context, "Запускать игру нужно в личном чате с ботом.")
         return
 
     gid = game_key(chat.id, message.message_thread_id)
     if gid in ACTIVE_GAMES:
-        await message.reply_text("Игра уже создана.")
+        await reply_game_message(message, context, "Игра уже создана.")
         return
 
     host_id = update.effective_user.id
@@ -241,7 +321,7 @@ async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data["invite_code"] = code
 
     context.user_data["awaiting_name"] = True
-    await message.reply_text("Игра создана. Введите ваше имя:")
+    await reply_game_message(message, context, "Игра создана. Введите ваше имя:")
 
 
 async def invite_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -251,7 +331,7 @@ async def invite_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not code:
         return
     link = f"https://t.me/{BOT_USERNAME}?start=join_{code}"
-    await update.message.reply_text(f"Ссылка для приглашения:\n{link}")
+    await reply_game_message(update.message, context, f"Ссылка для приглашения:\n{link}")
 
 
 async def users_shared_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -275,41 +355,41 @@ async def users_shared_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     link = f"https://t.me/{BOT_USERNAME}?start=join_{code}"
     for u in shared.users:
         try:
-            await context.bot.send_message(u.user_id, f"Вас приглашают в игру: {link}")
+            await send_game_message(u.user_id, None, context, f"Вас приглашают в игру: {link}")
         except Exception:
             continue
     text = "Приглашение отправлено" if count == 1 else "Приглашения отправлены"
-    await update.message.reply_text(text)
+    await reply_game_message(update.message, context, text)
 
 
 async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.args:
-        await update.message.reply_text("Использование: /join CODE")
+        await reply_game_message(update.message, context, "Использование: /join CODE")
         return
     code = context.args[0].strip()
     gid = JOIN_CODES.get(code)
     if not gid or gid not in ACTIVE_GAMES:
-        await update.message.reply_text("Игра не найдена.")
+        await reply_game_message(update.message, context, "Игра не найдена.")
         return
     game = ACTIVE_GAMES[gid]
     user_id = update.effective_user.id
     if user_id in game.players:
-        await update.message.reply_text("Вы уже участвуете.")
+        await reply_game_message(update.message, context, "Вы уже участвуете.")
         return
     if len(game.players) >= 5:
-        await update.message.reply_text("Лобби заполнено.")
+        await reply_game_message(update.message, context, "Лобби заполнено.")
         return
     game.players[user_id] = Player(user_id=user_id)
     game.player_chats[user_id] = update.effective_chat.id
     context.user_data["awaiting_name"] = True
-    await update.message.reply_text("Введите ваше имя:")
+    await reply_game_message(update.message, context, "Введите ваше имя:")
 
 
 async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     game = next((g for g in ACTIVE_GAMES.values() if user_id in g.players), None)
     if not game:
-        await update.message.reply_text("Вы не в игре.")
+        await reply_game_message(update.message, context, "Вы не в игре.")
         return
     player = game.players.get(user_id)
     name = player.name if player and player.name else update.effective_user.first_name
@@ -326,7 +406,7 @@ async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 pass
     game.jobs.clear()
     await broadcast(game, message, context)
-    await update.message.reply_text(message)
+    await reply_game_message(update.message, context, message)
     gid = game_key_from_state(game)
     ACTIVE_GAMES.pop(gid, None)
 
@@ -342,7 +422,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     player = game.players[user_id]
     player.name = name
     context.user_data.pop("awaiting_name", None)
-    await update.message.reply_text(f"Имя установлено: {name}")
+    await reply_game_message(update.message, context, f"Имя установлено: {name}")
     if game.status == "config" and user_id == game.host_id:
         buttons = [
             [
@@ -354,8 +434,11 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             buttons.append([
                 InlineKeyboardButton("[адм.] Тестовая игра", callback_data="adm_test")
             ])
-        await update.message.reply_text(
-            "Выберите длительность игры:", reply_markup=InlineKeyboardMarkup(buttons)
+        await reply_game_message(
+            update.message,
+            context,
+            "Выберите длительность игры:",
+            reply_markup=InlineKeyboardMarkup(buttons),
         )
     else:
         await broadcast(game, f"{name} присоединился к игре", context)
@@ -398,8 +481,8 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             markup = ReplyKeyboardMarkup(
                 buttons, resize_keyboard=True, one_time_keyboard=False
             )
-            await context.bot.send_message(
-                chat.id, "Пригласите игроков:", reply_markup=markup
+            await send_game_message(
+                chat.id, None, context, "Пригласите игроков:", reply_markup=markup
             )
 
     await prompt_letters_selection(game, context)
@@ -419,7 +502,7 @@ async def prompt_letters_selection(game: GameState, context: CallbackContext) ->
             ]
         ]
     )
-    await context.bot.send_message(chat_id, "Выберите режим:", reply_markup=keyboard)
+    await send_game_message(chat_id, None, context, "Выберите режим:", reply_markup=keyboard)
 
 
 async def letters_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -453,8 +536,10 @@ async def maybe_show_combos(game: GameState, context: CallbackContext) -> None:
     for uid, player in game.players.items():
         chat_id = game.player_chats.get(uid)
         if chat_id:
-            msg = await context.bot.send_message(
+            msg = await send_game_message(
                 chat_id,
+                None,
+                context,
                 "Выберите комбинацию (осталось 5 с):",
                 reply_markup=markup,
             )
@@ -515,8 +600,12 @@ async def send_start_prompt(game: GameState, context: CallbackContext) -> None:
     keyboard = InlineKeyboardMarkup(
         [[InlineKeyboardButton("Старт", callback_data="start_round")]]
     )
-    await context.bot.send_message(
-        chat_id, "Нажмите «Старт», чтобы начать раунд", reply_markup=keyboard
+    await send_game_message(
+        chat_id,
+        None,
+        context,
+        "Нажмите «Старт», чтобы начать раунд",
+        reply_markup=keyboard,
     )
 
 
@@ -525,7 +614,11 @@ async def auto_pick_combo(game: GameState, context: CallbackContext) -> None:
         return
     choice = random.choice(game.combo_choices)
     game.base_letters = tuple(ch.lower() for ch in choice)
-    await broadcast(game, f"Случайный выбор: {' • '.join(choice)}", context)
+    await broadcast(game, f"Случайный выбор: {' • '.join(choice)}", context, refresh=False)
+    for uid in list(game.players.keys()):
+        chat_id = game.player_chats.get(uid)
+        if chat_id:
+            await refresh_base_letters_button(chat_id, 0, context)
     await send_start_prompt(game, context)
 
 
@@ -549,13 +642,19 @@ async def combo_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             game,
             f"{chooser.name} выбрал(а) буквы: {' • '.join(game.combo_choices[idx])}",
             context,
+            refresh=False,
         )
     else:
         await broadcast(
             game,
             f"Буквы выбраны: {' • '.join(game.combo_choices[idx])}",
             context,
+            refresh=False,
         )
+    for uid in list(game.players.keys()):
+        chat_id = game.player_chats.get(uid)
+        if chat_id:
+            await refresh_base_letters_button(chat_id, 0, context)
     task = game.jobs.pop("combo_countdown", None)
     if task:
         task.cancel()
@@ -589,20 +688,11 @@ async def start_round(game: GameState, context: CallbackContext) -> None:
     game.jobs["end"] = context.job_queue.run_once(end_game_job, game.time_limit * 60, data=gid)
     if 0 in game.players:  # dummy bot
         game.jobs["dummy"] = context.job_queue.run_repeating(dummy_bot_word, 30, data=gid)
-    await broadcast(game, "Игра началась!", context)
-    letters = " • ".join(ch.upper() for ch in game.base_letters)
+    await broadcast(game, "Игра началась!", context, refresh=False)
     for uid in list(game.players.keys()):
         chat_id = game.player_chats.get(uid)
         if chat_id:
-            try:
-                await context.bot.unpin_all_chat_messages(chat_id)
-            except Exception:
-                pass
-            try:
-                msg = await context.bot.send_message(chat_id, letters)
-                await context.bot.pin_chat_message(chat_id, msg.message_id)
-            except Exception as exc:
-                logger.warning("Pin to %s failed: %s", chat_id, exc)
+            await refresh_base_letters_button(chat_id, 0, context)
 
 
 async def one_minute_warning(context: CallbackContext) -> None:
@@ -678,8 +768,8 @@ async def finish_game(game: GameState, context: CallbackContext, reason: str) ->
         chat_id = game.player_chats.get(uid)
         if chat_id:
             try:
-                await context.bot.send_message(
-                    chat_id, "Сыграть ещё раз?", reply_markup=keyboard
+                await send_game_message(
+                    chat_id, None, context, "Сыграть ещё раз?", reply_markup=keyboard
                 )
             except Exception:
                 pass
@@ -726,8 +816,10 @@ async def restart_game(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             InlineKeyboardButton("5 минут", callback_data="time_5"),
         ]
     ]
-    await context.bot.send_message(
+    await send_game_message(
         new_host_chat.id,
+        None,
+        context,
         "Выберите длительность игры:",
         reply_markup=InlineKeyboardMarkup(buttons),
     )
@@ -757,7 +849,9 @@ async def handle_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     now = asyncio.get_running_loop().time()
     last_time = context.user_data.get("last_message_time")
     if last_time and now - last_time < MESSAGE_RATE_LIMIT:
-        await update.message.reply_text("Слишком часто! Подождите немного.")
+        await reply_game_message(
+            update.message, context, "Слишком часто! Подождите немного."
+        )
         context.user_data["last_message_time"] = now
         logger.debug("Rate limit hit for user %s", update.effective_user.id)
         return
@@ -808,11 +902,15 @@ async def handle_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await broadcast(game, f"🔥 {player.name} прислал мощное слово!", context)
 
     if accepted:
-        await update.message.reply_text("✅")
-        await update.message.reply_text("Зачтены: " + ", ".join(accepted))
+        await reply_game_message(update.message, context, "✅")
+        await reply_game_message(
+            update.message, context, "Зачтены: " + ", ".join(accepted)
+        )
     if rejected:
-        await update.message.reply_text("❌")
-        await update.message.reply_text("Отклонены: " + ", ".join(rejected))
+        await reply_game_message(update.message, context, "❌")
+        await reply_game_message(
+            update.message, context, "Отклонены: " + ", ".join(rejected)
+        )
 
 
 # ---------------------------------------------------------------------------
