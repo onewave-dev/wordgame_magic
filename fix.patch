@@ -1,61 +1,8 @@
 diff --git a/grebeshok_game/grebeshok_app.py b/grebeshok_game/grebeshok_app.py
-index 54eb985313e68104d944d97b87e292bac1ba87c1..25330d738474288a334789fdcf99490216aeca4e 100644
+index 25330d738474288a334789fdcf99490216aeca4e..ee4f4e595a9e293956c9dee97c1aa2dc35abc7ec 100644
 --- a/grebeshok_game/grebeshok_app.py
 +++ b/grebeshok_game/grebeshok_app.py
-@@ -412,54 +412,75 @@ async def start_round(game: GameState, context: CallbackContext) -> None:
-     await broadcast(game, "Игра началась!", context)
- 
- 
- async def one_minute_warning(context: CallbackContext) -> None:
-     gid = context.job.data
-     game = ACTIVE_GAMES.get(gid)
-     if game:
-         await broadcast(game, "Осталась 1 минута!", context)
- 
- 
- async def end_game_job(context: CallbackContext) -> None:
-     gid = context.job.data
-     game = ACTIVE_GAMES.get(gid)
-     if game:
-         await finish_game(game, context, "Время вышло")
- 
- 
- async def finish_game(game: GameState, context: CallbackContext, reason: str) -> None:
-     gid = game_key_from_state(game)
-     for job in game.jobs.values():
-         try:
-             job.schedule_removal()
-         except Exception:
-             pass
-     game.status = "finished"
--    scores = sorted(
--        ((p.points, p.name) for p in game.players.values()), reverse=True
-+    letters = " • ".join(ch.upper() for ch in game.base_letters)
-+    players_sorted = sorted(
-+        game.players.values(), key=lambda p: p.points, reverse=True
-     )
--    text = reason + "\n" + "\n".join(f"{name}: {pts}" for pts, name in scores)
-+    max_points = players_sorted[0].points if players_sorted else 0
-+    winner_names = ", ".join(
-+        p.name for p in players_sorted if p.points == max_points
-+    )
-+    lines = [
-+        "**Игра окончена! Результаты**:",
-+        "",
-+        f"**Буквы:** {letters}",
-+        "",
-+    ]
-+    for player in players_sorted:
-+        lines.append(player.name)
-+        lines.append("Слова:")
-+        for word in player.words:
-+            lines.append(f"  {word}")
-+        lines.append(f"**Итог:** {player.points}")
-+        lines.append("")
-+    if lines and lines[-1] == "":
-+        lines.pop()
-+    lines.append(f"🏆 **Победитель:** {winner_names}")
-+    text = "\n".join(lines)
+@@ -462,79 +462,90 @@ async def finish_game(game: GameState, context: CallbackContext, reason: str) ->
      await broadcast(game, text, context)
      ACTIVE_GAMES.pop(gid, None)
  
@@ -81,3 +28,74 @@ index 54eb985313e68104d944d97b87e292bac1ba87c1..25330d738474288a334789fdcf994902
  
  
  async def handle_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
++    responses = {
++        "ok": "✅",
++        "not_found": "Нет такого слова",
++        "missing_letters": "Слово не содержит все буквы",
++        "used_by_you": "Вы уже использовали это слово",
++        "used_by_other": "Слово уже использовано другим игроком",
++    }
++
+     text = update.message.text.lower().replace("ё", "е")
+     if not re.fullmatch(r"[а-я]+", text):
+         return
+     chat = update.effective_chat
+     gid = game_key(chat.id, update.message.message_thread_id)
+     game = get_game(chat.id, update.message.message_thread_id)
+     user_id = update.effective_user.id
+     if not game:
+         game = next((g for g in ACTIVE_GAMES.values() if user_id in g.players), None)
+         gid = game_key_from_state(game) if game else None
+     if not game or game.status != "running":
+         return
+     game.player_chats[user_id] = chat.id
+     if text not in DICTIONARY:
+-        await update.message.reply_text("Нет такого слова")
++        await update.message.reply_text(responses["not_found"])
+         return
+     if any(text.count(b) < 1 for b in game.base_letters):
+-        await update.message.reply_text("Слово не содержит все буквы")
+-        return
+-    if text in game.used_words:
+-        await update.message.reply_text("Слово уже использовано")
++        await update.message.reply_text(responses["missing_letters"])
+         return
+     player = game.players.get(user_id)
+     if not player:
+         return
++    if text in player.words:
++        await update.message.reply_text(responses["used_by_you"])
++        return
++    if text in game.used_words:
++        await update.message.reply_text(responses["used_by_other"])
++        return
+     player.words.append(text)
+     player.points += 1
+     game.used_words.add(text)
+-    await update.message.reply_text("✅")
++    await update.message.reply_text(responses["ok"])
+     await broadcast(game, f"{player.name}: {text}", context)
+     if sum(text.count(b) for b in game.base_letters) >= 6:
+         await broadcast(game, f"🔥 {player.name} прислал мощное слово!", context)
+ 
+ 
+ # ---------------------------------------------------------------------------
+ # Handler registration and FastAPI setup
+ # ---------------------------------------------------------------------------
+ 
+ 
+ APPLICATION: Optional[Application] = None
+ BOT_USERNAME: str = ""
+ 
+ 
+ def register_handlers(application: Application, include_start: bool = False) -> None:
+     global APPLICATION
+     APPLICATION = application
+     if include_start:
+         application.add_handler(CommandHandler("start", start_cmd))
+     application.add_handler(CommandHandler("newgame", newgame))
+     application.add_handler(CommandHandler("join", join_cmd))
+     application.add_handler(CommandHandler(["quit", "exit"], quit_cmd))
+     application.add_handler(
+         MessageHandler(filters.TEXT & (~filters.COMMAND), handle_name),
+         group=0,
