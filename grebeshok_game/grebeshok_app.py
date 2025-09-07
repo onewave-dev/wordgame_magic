@@ -770,7 +770,17 @@ async def finish_game(game: GameState, context: CallbackContext, reason: str) ->
         if chat_id:
             try:
                 await send_game_message(
-                    chat_id, None, context, "Сыграть ещё раз?", reply_markup=keyboard
+                    chat_id,
+                    None,
+                    context,
+                    "Новая игра с теми же участниками?",
+                    reply_markup=keyboard,
+                )
+                await send_game_message(
+                    chat_id,
+                    None,
+                    context,
+                    "Либо нажмите /start для запуска новой сессии игры",
                 )
             except Exception:
                 pass
@@ -797,6 +807,9 @@ async def restart_game(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     new_host_chat = query.message.chat
     new_gid = game_key(new_host_chat.id, query.message.message_thread_id)
     new_host_id = query.from_user.id
+
+    # Remove any leftover invite codes so no further invitations are suggested
+    context.user_data.pop("invite_code", None)
 
     new_game = GameState(host_id=new_host_id)
     for uid, player in old_game.players.items():
