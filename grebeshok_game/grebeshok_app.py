@@ -234,29 +234,14 @@ async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await message.reply_text("Игра создана. Введите ваше имя:")
 
 
-async def invite_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle the "Пригласить из контактов" button."""
+async def invite_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send deep-link invitation to the host on text button press."""
 
-    query = update.callback_query
-    await query.answer()
-    code = query.data.split("_", 1)[1]
-    context.user_data["invite_code"] = code
-    button = KeyboardButton("Отправить контакт", request_contact=True)
-    markup = ReplyKeyboardMarkup([[button]], resize_keyboard=True, one_time_keyboard=True)
-    await query.message.reply_text(
-        "Поделитесь контактом — бот отправит приглашение",
-        reply_markup=markup,
-    )
-
-
-async def send_invite_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send deep-link invitation to the host."""
-
-    query = update.callback_query
-    await query.answer()
-    code = query.data.split("_", 1)[1]
+    code = context.user_data.get("invite_code")
+    if not code:
+        return
     link = f"https://t.me/{BOT_USERNAME}?start=join_{code}"
-    await query.message.reply_text(f"Ссылка для приглашения:\n{link}")
+    await update.message.reply_text(f"Ссылка для приглашения:\n{link}")
 
 
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -341,17 +326,6 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     context.user_data.pop("awaiting_name", None)
     await update.message.reply_text(f"Имя установлено: {name}")
     if game.status == "config" and user_id == game.host_id:
-        game.status = "waiting"
-        code = context.user_data.get("invite_code")
-        if code:
-            invite_keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("Пригласить из контактов", callback_data=f"contact_{code}")],
-                [InlineKeyboardButton("Создать ссылку", callback_data=f"link_{code}")],
-            ])
-            await update.message.reply_text(
-                "Пригласите игроков:", reply_markup=invite_keyboard
-            )
-
         buttons = [
             [
                 InlineKeyboardButton("3 минуты", callback_data="time_3"),
@@ -359,7 +333,9 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             ]
         ]
         if user_id == ADMIN_ID:
-            buttons.append([InlineKeyboardButton("[адм.] Тестовая игра", callback_data="adm_test")])
+            buttons.append([
+                InlineKeyboardButton("[адм.] Тестовая игра", callback_data="adm_test")
+            ])
         await update.message.reply_text(
             "Выберите длительность игры:", reply_markup=InlineKeyboardMarkup(buttons)
         )
@@ -385,6 +361,19 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     elif query.data.startswith("time_"):
         game.time_limit = int(query.data.split("_")[1])
         await query.edit_message_text("Длительность установлена")
+        game.status = "waiting"
+        code = context.user_data.get("invite_code")
+        if code:
+            buttons = [
+                [KeyboardButton("Пригласить из контактов", request_contact=True)],
+                [KeyboardButton("Создать ссылку")],
+            ]
+            markup = ReplyKeyboardMarkup(
+                buttons, resize_keyboard=True, one_time_keyboard=True
+            )
+            await context.bot.send_message(
+                chat.id, "Пригласите игроков:", reply_markup=markup
+            )
 
     keyboard = InlineKeyboardMarkup(
         [
@@ -790,13 +779,15 @@ def register_handlers(application: Application, include_start: bool = False) -> 
         MessageHandler(filters.TEXT & (~filters.COMMAND), handle_name),
         group=0,
     )
+    application.add_handler(
+        MessageHandler(filters.Regex("^Создать ссылку$"), invite_link),
+        group=0,
+    )
     application.add_handler(MessageHandler(filters.CONTACT, handle_contact))
     application.add_handler(CallbackQueryHandler(time_selected, pattern="^(time_|adm_test)"))
     application.add_handler(CallbackQueryHandler(letters_selected, pattern="^letters_"))
     application.add_handler(CallbackQueryHandler(combo_chosen, pattern="^combo_"))
     application.add_handler(CallbackQueryHandler(start_round_cb, pattern="^start_round$"))
-    application.add_handler(CallbackQueryHandler(invite_contact, pattern="^contact_"))
-    application.add_handler(CallbackQueryHandler(send_invite_link, pattern="^link_"))
     application.add_handler(CallbackQueryHandler(restart_game, pattern="^restart_"))
     application.add_handler(
         MessageHandler(filters.TEXT & (~filters.COMMAND), handle_word),
