@@ -114,10 +114,16 @@ ACTIVE_GAMES: Dict[str, GameState] = {}
 JOIN_CODES: Dict[str, str] = {}
 BASE_MSG_IDS: Dict[str, int] = {}
 LAST_REFRESH: Dict[Tuple[int, int], float] = {}
+# Map player chat (chat_id, thread_id) to game_id for quick lookup
+CHAT_GAMES: Dict[Tuple[int, int], str] = {}
 
 
 def get_game(chat_id: int, thread_id: Optional[int]) -> Optional[GameState]:
-    """Retrieve a game by chat identifier."""
+    """Retrieve a game by chat/thread identifier."""
+    key = (chat_id, thread_id or 0)
+    game_id = CHAT_GAMES.get(key)
+    if game_id:
+        return ACTIVE_GAMES.get(game_id)
     for g in ACTIVE_GAMES.values():
         if chat_id in g.player_chats.values():
             return g
@@ -263,6 +269,7 @@ def create_dm_game(host_id: int) -> GameState:
     game.players[host_id] = Player(user_id=host_id)
     game.player_chats[host_id] = host_id
     ACTIVE_GAMES[game_id] = game
+    CHAT_GAMES[(host_id, 0)] = game_id
     return game
 
 
@@ -315,6 +322,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         context.user_data.pop("awaiting_name", None)
         return
     game.player_chats[user_id] = chat.id
+    CHAT_GAMES[(chat.id, 0)] = game.game_id
     player = game.players.get(user_id)
     if player and player.name:
         context.user_data.pop("awaiting_name", None)
@@ -378,6 +386,18 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     thread_id = query.message.message_thread_id
     if query.data == "adm_test" and query.from_user.id == ADMIN_ID:
         game = create_dm_game(query.from_user.id)
+        # Remove any previous games tied to this chat to avoid stale state
+        for gid, g in list(ACTIVE_GAMES.items()):
+            if gid == game.game_id:
+                continue
+            if chat_id in g.player_chats.values():
+                for cid in set(g.player_chats.values()):
+                    CHAT_GAMES.pop((cid, 0), None)
+                BASE_MSG_IDS.pop(gid, None)
+                for code, cg in list(JOIN_CODES.items()):
+                    if cg == gid:
+                        JOIN_CODES.pop(code, None)
+                ACTIVE_GAMES.pop(gid, None)
         game.players[query.from_user.id].name = context.user_data.get("name", "")
         game.time_limit = 1.5
         game.players[0] = Player(user_id=0, name="Бот")
@@ -448,6 +468,7 @@ async def add_player_via_invite(
         return
     game.players[user_id] = Player(user_id=user_id)
     game.player_chats[user_id] = user_id
+    CHAT_GAMES[(user_id, 0)] = game.game_id
     await context.bot.send_message(
         user_id,
         "Введите ваше имя",
@@ -567,6 +588,8 @@ async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await reply_game_message(update.message, context, text)
     await broadcast(game.game_id, text)
     BASE_MSG_IDS.pop(game.game_id, None)
+    for cid in set(game.player_chats.values()):
+        CHAT_GAMES.pop((cid, 0), None)
     ACTIVE_GAMES.pop(game.game_id, None)
 
 
@@ -926,6 +949,8 @@ async def restart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "Игра завершена. Для новой игры с новыми участниками нажмите /start",
         )
         BASE_MSG_IDS.pop(game.game_id, None)
+        for cid in set(game.player_chats.values()):
+            CHAT_GAMES.pop((cid, 0), None)
         ACTIVE_GAMES.pop(game.game_id, None)
         await query.edit_message_text(
             "Игра завершена. Для новой игры с новыми участниками нажмите /start"
@@ -986,6 +1011,7 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
     game.player_chats[user_id] = chat.id
+    CHAT_GAMES[(chat.id, 0)] = game.game_id
     player = game.players.get(user_id)
     if not player:
         saved_name = context.user_data.get("name")
