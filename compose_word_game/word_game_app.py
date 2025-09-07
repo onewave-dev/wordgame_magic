@@ -611,6 +611,7 @@ async def base_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             job = context.job_queue.run_repeating(
                 countdown,
                 interval=1,
+                first=0,
                 chat_id=cid,
                 data={
                     "thread_id": thread,
