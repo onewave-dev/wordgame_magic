@@ -31,6 +31,20 @@ REGISTERED_GAMES: Set[str] = set()
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if context.args:
+        join_code = context.args[0]
+        if join_code in compose_game.JOIN_CODES:
+            if "compose" not in REGISTERED_GAMES:
+                compose_game.register_handlers(APPLICATION)
+                REGISTERED_GAMES.add("compose")
+            await compose_game.start_cmd(update, context)
+            return
+        if join_code.startswith("join_") or join_code in grebeshok_game.JOIN_CODES:
+            if "grebeshok" not in REGISTERED_GAMES:
+                grebeshok_game.register_handlers(APPLICATION)
+                REGISTERED_GAMES.add("grebeshok")
+            await grebeshok_game.start_cmd(update, context)
+            return
     keyboard = InlineKeyboardMarkup(
         [
             [
