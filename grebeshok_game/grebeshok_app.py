@@ -32,7 +32,13 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+    Update,
+)
 from telegram.ext import (
     Application,
     ApplicationHandlerStop,
@@ -184,7 +190,14 @@ async def broadcast(game: GameState, text: str, context: CallbackContext) -> Non
 
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Entry point for ``/start``: immediately begin a new game."""
+    """Entry point for ``/start`` command."""
+
+    if context.args and context.args[0].startswith("join_"):
+        code = context.args[0][5:]
+        context.args = [code]
+        await join_cmd(update, context)
+        return
+
     await newgame(update, context)
 
 
@@ -211,10 +224,40 @@ async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     code = "".join(random.choices("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", k=6))
     JOIN_CODES[code] = gid
 
+    invite_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Пригласить из контактов", callback_data=f"contact_{code}")],
+        [InlineKeyboardButton("Создать ссылку", callback_data=f"link_{code}")],
+    ])
+
     context.user_data["awaiting_name"] = True
     await message.reply_text(
-        f"Игра создана. Код для приглашения: {code}\nВведите ваше имя:"
+        f"Игра создана. Код для приглашения: {code}\nВведите ваше имя:",
+        reply_markup=invite_keyboard,
     )
+
+
+async def invite_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle the "Пригласить из контактов" button."""
+
+    query = update.callback_query
+    await query.answer()
+    code = query.data.split("_", 1)[1]
+    button = KeyboardButton("Отправить контакт", request_contact=True)
+    markup = ReplyKeyboardMarkup([[button]], resize_keyboard=True, one_time_keyboard=True)
+    await query.message.reply_text(
+        f"Поделитесь контактом и отправьте ему код: {code}",
+        reply_markup=markup,
+    )
+
+
+async def send_invite_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send deep-link invitation to the host."""
+
+    query = update.callback_query
+    await query.answer()
+    code = query.data.split("_", 1)[1]
+    link = f"https://t.me/{BOT_USERNAME}?start=join_{code}"
+    await query.message.reply_text(f"Ссылка для приглашения:\n{link}")
 
 
 async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -542,6 +585,8 @@ def register_handlers(application: Application, include_start: bool = False) -> 
     application.add_handler(CallbackQueryHandler(time_selected, pattern="^(time_|adm_test)"))
     application.add_handler(CallbackQueryHandler(letters_selected, pattern="^letters_"))
     application.add_handler(CallbackQueryHandler(combo_chosen, pattern="^combo_"))
+    application.add_handler(CallbackQueryHandler(invite_contact, pattern="^contact_"))
+    application.add_handler(CallbackQueryHandler(send_invite_link, pattern="^link_"))
     application.add_handler(
         MessageHandler(filters.TEXT & (~filters.COMMAND), handle_word),
         group=1,
