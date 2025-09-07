@@ -527,14 +527,6 @@ async def dummy_bot_word(context: CallbackContext) -> None:
 
 
 async def handle_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    responses = {
-        "ok": "✅",
-        "not_found": "Нет такого слова",
-        "missing_letters": "Слово не содержит все буквы",
-        "used_by_you": "Вы уже использовали это слово",
-        "used_by_other": "Слово уже использовано другим игроком",
-    }
-
     text = update.message.text.lower().replace("ё", "е")
     if not re.fullmatch(r"[а-я]+", text):
         return
@@ -549,24 +541,29 @@ async def handle_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     game.player_chats[user_id] = chat.id
     if text not in DICTIONARY:
-        await update.message.reply_text(responses["not_found"])
+        await update.message.reply_text("❌")
+        await update.message.reply_text(f"Отклонено: {text} (такого слова нет в словаре)")
         return
     if any(text.count(b) < 1 for b in game.base_letters):
-        await update.message.reply_text(responses["missing_letters"])
+        await update.message.reply_text("❌")
+        await update.message.reply_text(f"Отклонено: {text} (слово не содержит все буквы)")
         return
     player = game.players.get(user_id)
     if not player:
         return
     if text in player.words:
-        await update.message.reply_text(responses["used_by_you"])
+        await update.message.reply_text("❌")
+        await update.message.reply_text(f"Отклонено: {text} (вы уже использовали это слово)")
         return
     if text in game.used_words:
-        await update.message.reply_text(responses["used_by_other"])
+        await update.message.reply_text("❌")
+        await update.message.reply_text(f"Отклонено: {text} (уже использовано другим игроком)")
         return
     player.words.append(text)
     player.points += 1
     game.used_words.add(text)
-    await update.message.reply_text(responses["ok"])
+    await update.message.reply_text("✅")
+    await update.message.reply_text(f"Зачтено: {text}")
     await broadcast(game, f"{player.name}: {text}", context)
     if sum(text.count(b) for b in game.base_letters) >= 6:
         await broadcast(game, f"🔥 {player.name} прислал мощное слово!", context)

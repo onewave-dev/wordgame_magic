@@ -1001,9 +1001,17 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     async def send_to_user(text: str) -> None:
         logger.debug("send_to_user start %.6f", perf_counter() - start_ts)
+        emoji = "✅" if text.startswith("Зачтено") else "❌"
         try:
+            await context.bot.send_message(user_id, emoji)
             await context.bot.send_message(user_id, text)
         except TelegramError:
+            await send_game_message(
+                chat_id,
+                thread_id,
+                context,
+                f"{player_name} {emoji}",
+            )
             await send_game_message(
                 chat_id,
                 thread_id,
