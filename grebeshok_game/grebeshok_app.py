@@ -295,15 +295,24 @@ async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not game:
         await update.message.reply_text("Вы не в игре.")
         return
-    if user_id == game.host_id:
-        await finish_game(game, context, "Игра прервана хостом")
-        return
-    player = game.players.pop(user_id, None)
-    chat_id = game.player_chats.pop(user_id, None)
-    if chat_id:
-        await update.message.reply_text("Вы вышли из игры")
-    if player and player.name:
-        await broadcast(game, f"{player.name} вышел из игры", context)
+    player = game.players.get(user_id)
+    name = player.name if player and player.name else update.effective_user.first_name
+    message = (
+        f"Игра прервана участником {name}. Вы можете начать заново, нажав /start"
+    )
+    for job in game.jobs.values():
+        try:
+            job.schedule_removal()
+        except Exception:
+            try:
+                job.cancel()
+            except Exception:
+                pass
+    game.jobs.clear()
+    await broadcast(game, message, context)
+    await update.message.reply_text(message)
+    gid = game_key_from_state(game)
+    ACTIVE_GAMES.pop(gid, None)
 
 
 async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
