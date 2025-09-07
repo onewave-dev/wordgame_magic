@@ -252,6 +252,7 @@ async def request_name(user_id: int, chat_id: int, context: CallbackContext) -> 
         None,
         context,
         "Введите ваше имя",
+        reply_markup=ForceReply(selective=True),
     )
 
 
@@ -303,7 +304,12 @@ async def maybe_show_base_options(
 
 
 async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat = update.effective_chat
+    message = update.message
+    if not message or not message.reply_to_message:
+        return
+    if message.reply_to_message.from_user.id != context.bot.id:
+        return
+    chat = message.chat
     chat_id = chat.id
     user_id = update.effective_user.id
     game = get_game(chat_id, None)
@@ -313,7 +319,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     player = game.players.get(user_id)
     if player and player.name:
         return
-    name = update.message.text.strip()
+    name = message.text.strip()
     if not player:
         if len(game.players) >= 5:
             await reply_game_message(update.message, context, "Лобби заполнено")
@@ -439,7 +445,11 @@ async def add_player_via_invite(
         return
     game.players[user_id] = Player(user_id=user_id)
     game.player_chats[user_id] = user_id
-    await context.bot.send_message(user_id, "Введите ваше имя")
+    await context.bot.send_message(
+        user_id,
+        "Введите ваше имя",
+        reply_markup=ForceReply(selective=True),
+    )
 
 
 async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

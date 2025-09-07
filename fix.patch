@@ -1,101 +1,190 @@
-diff --git a/grebeshok_game/grebeshok_app.py b/grebeshok_game/grebeshok_app.py
-index 25330d738474288a334789fdcf99490216aeca4e..ee4f4e595a9e293956c9dee97c1aa2dc35abc7ec 100644
---- a/grebeshok_game/grebeshok_app.py
-+++ b/grebeshok_game/grebeshok_app.py
-@@ -462,79 +462,90 @@ async def finish_game(game: GameState, context: CallbackContext, reason: str) ->
-     await broadcast(game, text, context)
-     ACTIVE_GAMES.pop(gid, None)
+diff --git a/compose_word_game/word_game_app.py b/compose_word_game/word_game_app.py
+index 321f52d787a728fd5b0f527f059849843801f2ac..979a0832407dae84e75f2c15c7a24384a5a1d6b6 100644
+--- a/compose_word_game/word_game_app.py
++++ b/compose_word_game/word_game_app.py
+@@ -230,50 +230,51 @@ WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "/webhook")
+ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+     message = update.effective_message
+     code = context.args[0] if context.args else None
+     if code and code in JOIN_CODES:
+         gid = JOIN_CODES[code]
+         game = ACTIVE_GAMES.get(gid)
+         if game:
+             await add_player_via_invite(update.effective_user, game, context)
+         else:
+             if message:
+                 await reply_game_message(message, context, "Игра не найдена")
+         return
+     user = update.effective_user
+     game = create_dm_game(user.id)
+     if message:
+         await reply_game_message(message, context, f"Игра #{game.game_id} создана")
+     await request_name(user.id, update.effective_chat.id, context)
  
  
- async def dummy_bot_word(context: CallbackContext) -> None:
-     gid = context.job.data
-     game = ACTIVE_GAMES.get(gid)
-     if not game or not game.base_letters:
-         return
-     words = list(viable_words(tuple(game.base_letters)))
-     if not words:
-         return
-     word = random.choice(words)
-     player = game.players[0]
-     if word in game.used_words:
-         return
-     if any(word.count(b) < 1 for b in game.base_letters):
-         return
-     player.words.append(word)
-     player.points += 1
-     game.used_words.add(word)
-     await broadcast(game, f"Бот: {word}", context)
+ async def request_name(user_id: int, chat_id: int, context: CallbackContext) -> None:
+     await send_game_message(
+         chat_id,
+         None,
+         context,
+         "Введите ваше имя",
++        reply_markup=ForceReply(selective=True),
+     )
  
  
- async def handle_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-+    responses = {
-+        "ok": "✅",
-+        "not_found": "Нет такого слова",
-+        "missing_letters": "Слово не содержит все буквы",
-+        "used_by_you": "Вы уже использовали это слово",
-+        "used_by_other": "Слово уже использовано другим игроком",
-+    }
-+
-     text = update.message.text.lower().replace("ё", "е")
-     if not re.fullmatch(r"[а-я]+", text):
+ def create_dm_game(host_id: int) -> GameState:
+     """Create a direct-message game for the host."""
+     game_id = secrets.token_urlsafe(8)
+     game = GameState(host_id=host_id, game_id=game_id)
+     game.players[host_id] = Player(user_id=host_id)
+     game.player_chats[host_id] = host_id
+     ACTIVE_GAMES[game_id] = game
+     return game
+ 
+ 
+ async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+     user = update.effective_user
+     game = create_dm_game(user.id)
+     chat_id = update.effective_chat.id
+     if update.message:
+         await reply_game_message(update.message, context, f"Игра #{game.game_id} создана")
+     await request_name(user.id, chat_id, context)
+ 
+ 
+ async def maybe_show_base_options(
+     chat_id: int,
+     thread_id: Optional[int],
+diff --git a/compose_word_game/word_game_app.py b/compose_word_game/word_game_app.py
+index 321f52d787a728fd5b0f527f059849843801f2ac..979a0832407dae84e75f2c15c7a24384a5a1d6b6 100644
+--- a/compose_word_game/word_game_app.py
++++ b/compose_word_game/word_game_app.py
+@@ -281,61 +282,66 @@ async def maybe_show_base_options(
+     game: Optional[GameState] = None,
+ ) -> None:
+     """Send base word options to the host when conditions are met."""
+     if game is None:
+         game = get_game(chat_id, thread_id or 0)
+     if not game or game.status != "waiting":
          return
-     chat = update.effective_chat
-     gid = game_key(chat.id, update.message.message_thread_id)
-     game = get_game(chat.id, update.message.message_thread_id)
+     if len(game.players) >= 2 and all(p.name for p in game.players.values()):
+         await send_game_message(
+             chat_id,
+             thread_id,
+             context,
+             "Выберите базовое слово:",
+             reply_markup=InlineKeyboardMarkup(
+                 [
+                     [
+                         InlineKeyboardButton("Вручную", callback_data="base_manual"),
+                         InlineKeyboardButton("Случайное", callback_data="base_random"),
+                     ]
+                 ]
+             ),
+         )
+ 
+ 
+ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+-    chat = update.effective_chat
++    message = update.message
++    if not message or not message.reply_to_message:
++        return
++    if message.reply_to_message.from_user.id != context.bot.id:
++        return
++    chat = message.chat
+     chat_id = chat.id
      user_id = update.effective_user.id
+     game = get_game(chat_id, None)
      if not game:
-         game = next((g for g in ACTIVE_GAMES.values() if user_id in g.players), None)
-         gid = game_key_from_state(game) if game else None
-     if not game or game.status != "running":
          return
      game.player_chats[user_id] = chat.id
-     if text not in DICTIONARY:
--        await update.message.reply_text("Нет такого слова")
-+        await update.message.reply_text(responses["not_found"])
-         return
-     if any(text.count(b) < 1 for b in game.base_letters):
--        await update.message.reply_text("Слово не содержит все буквы")
--        return
--    if text in game.used_words:
--        await update.message.reply_text("Слово уже использовано")
-+        await update.message.reply_text(responses["missing_letters"])
-         return
      player = game.players.get(user_id)
-     if not player:
+     if player and player.name:
          return
-+    if text in player.words:
-+        await update.message.reply_text(responses["used_by_you"])
-+        return
-+    if text in game.used_words:
-+        await update.message.reply_text(responses["used_by_other"])
-+        return
-     player.words.append(text)
-     player.points += 1
-     game.used_words.add(text)
--    await update.message.reply_text("✅")
-+    await update.message.reply_text(responses["ok"])
-     await broadcast(game, f"{player.name}: {text}", context)
-     if sum(text.count(b) for b in game.base_letters) >= 6:
-         await broadcast(game, f"🔥 {player.name} прислал мощное слово!", context)
+-    name = update.message.text.strip()
++    name = message.text.strip()
+     if not player:
+         if len(game.players) >= 5:
+             await reply_game_message(update.message, context, "Лобби заполнено")
+             raise ApplicationHandlerStop
+         player = Player(user_id=user_id, name=name)
+         game.players[user_id] = player
+         context.user_data["name"] = name
+         await reply_game_message(update.message, context, f"Имя установлено: {player.name}")
+         await broadcast(
+             game.game_id,
+             f"{bold_alnum(player.name)} присоединился к игре",
+             parse_mode="HTML",
+         )
+         host_chat = game.player_chats.get(game.host_id)
+         if host_chat:
+             await maybe_show_base_options(host_chat, None, context, game)
+         raise ApplicationHandlerStop
+     elif not player.name:
+         player.name = name
+         context.user_data["name"] = name
+         await reply_game_message(update.message, context, f"Имя установлено: {player.name}")
+         await broadcast(
+             game.game_id,
+             f"{bold_alnum(player.name)} присоединился к игре",
+             parse_mode="HTML",
+diff --git a/compose_word_game/word_game_app.py b/compose_word_game/word_game_app.py
+index 321f52d787a728fd5b0f527f059849843801f2ac..979a0832407dae84e75f2c15c7a24384a5a1d6b6 100644
+--- a/compose_word_game/word_game_app.py
++++ b/compose_word_game/word_game_app.py
+@@ -417,51 +423,55 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
+             one_time_keyboard=True,
+         )
+         await reply_game_message(
+             query.message,
+             context,
+             "Выберите способ приглашения:",
+             reply_markup=keyboard,
+         )
  
  
- # ---------------------------------------------------------------------------
- # Handler registration and FastAPI setup
- # ---------------------------------------------------------------------------
+ async def add_player_via_invite(
+     user: User,
+     game: GameState,
+     context: CallbackContext,
+ ) -> None:
+     """Helper to add a player to a game via an invite link or code."""
+     user_id = user.id
+     if user_id in game.players:
+         await context.bot.send_message(user_id, "Вы уже в игре")
+         return
+     if len(game.players) >= 5:
+         await context.bot.send_message(user_id, "Лобби заполнено")
+         return
+     game.players[user_id] = Player(user_id=user_id)
+     game.player_chats[user_id] = user_id
+-    await context.bot.send_message(user_id, "Введите ваше имя")
++    await context.bot.send_message(
++        user_id,
++        "Введите ваше имя",
++        reply_markup=ForceReply(selective=True),
++    )
  
  
- APPLICATION: Optional[Application] = None
- BOT_USERNAME: str = ""
+ async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+     args = context.args
+     if not args:
+         await reply_game_message(update.message, context, "Укажите код приглашения")
+         return
+     join_code = args[0]
+     game_id = JOIN_CODES.get(join_code)
+     if not game_id:
+         await reply_game_message(update.message, context, "Неверный код")
+         return
+     game = ACTIVE_GAMES.get(game_id)
+     if not game:
+         await reply_game_message(update.message, context, "Игра не найдена")
+         return
+     await add_player_via_invite(update.effective_user, game, context)
  
  
- def register_handlers(application: Application, include_start: bool = False) -> None:
-     global APPLICATION
-     APPLICATION = application
-     if include_start:
-         application.add_handler(CommandHandler("start", start_cmd))
-     application.add_handler(CommandHandler("newgame", newgame))
-     application.add_handler(CommandHandler("join", join_cmd))
-     application.add_handler(CommandHandler(["quit", "exit"], quit_cmd))
-     application.add_handler(
-         MessageHandler(filters.TEXT & (~filters.COMMAND), handle_name),
-         group=0,
+ async def join_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+     query = update.callback_query
+     await query.answer()
+     data = query.data
+     join_code = data.split("_", 1)[1] if "_" in data else ""
+     game_id = JOIN_CODES.get(join_code)
