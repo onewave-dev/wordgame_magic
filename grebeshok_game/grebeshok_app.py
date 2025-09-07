@@ -403,6 +403,20 @@ def game_key_from_state(game: GameState) -> Tuple[int, int]:
     raise KeyError("Game not found in ACTIVE_GAMES")
 
 
+async def send_start_prompt(game: GameState, context: CallbackContext) -> None:
+    """Send a start button to the game initiator."""
+
+    chat_id = game.player_chats.get(game.host_id)
+    if not chat_id:
+        return
+    keyboard = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("Старт", callback_data="start_round")]]
+    )
+    await context.bot.send_message(
+        chat_id, "Нажмите «Старт», чтобы начать раунд", reply_markup=keyboard
+    )
+
+
 async def auto_pick_combo(context: CallbackContext) -> None:
     gid = context.job.data
     game = ACTIVE_GAMES.get(gid)
@@ -411,7 +425,7 @@ async def auto_pick_combo(context: CallbackContext) -> None:
     choice = random.choice(game.combo_choices)
     game.base_letters = tuple(ch.lower() for ch in choice)
     await broadcast(game, f"Случайный выбор: {' • '.join(choice)}", context)
-    await start_round(game, context)
+    await send_start_prompt(game, context)
 
 
 async def combo_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -444,6 +458,25 @@ async def combo_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     job = game.jobs.pop("auto_pick", None)
     if job:
         job.schedule_removal()
+    await send_start_prompt(game, context)
+
+
+async def start_round_cb(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    query = update.callback_query
+    await query.answer()
+    chat = query.message.chat
+    gid = game_key(chat.id, query.message.message_thread_id)
+    game = ACTIVE_GAMES.get(gid)
+    if (
+        not game
+        or game.status != "choosing"
+        or not game.base_letters
+        or query.from_user.id != game.host_id
+    ):
+        return
+    await query.edit_message_reply_markup(None)
     await start_round(game, context)
 
 
@@ -657,6 +690,7 @@ def register_handlers(application: Application, include_start: bool = False) -> 
     application.add_handler(CallbackQueryHandler(time_selected, pattern="^(time_|adm_test)"))
     application.add_handler(CallbackQueryHandler(letters_selected, pattern="^letters_"))
     application.add_handler(CallbackQueryHandler(combo_chosen, pattern="^combo_"))
+    application.add_handler(CallbackQueryHandler(start_round_cb, pattern="^start_round$"))
     application.add_handler(CallbackQueryHandler(invite_contact, pattern="^contact_"))
     application.add_handler(CallbackQueryHandler(send_invite_link, pattern="^link_"))
     application.add_handler(CallbackQueryHandler(restart_game, pattern="^restart_"))
