@@ -81,7 +81,7 @@ async def on_startup() -> None:
             await APPLICATION.bot.set_webhook(
                 url=webhook_url,
                 secret_token=WEBHOOK_SECRET,
-                allowed_updates=[],
+                allowed_updates=["message", "callback_query", "chat_member"],
             )
 
 
@@ -106,7 +106,7 @@ async def set_webhook() -> JSONResponse:
     await APPLICATION.bot.set_webhook(
         url=webhook_url,
         secret_token=WEBHOOK_SECRET,
-        allowed_updates=[],
+        allowed_updates=["message", "callback_query", "chat_member"],
     )
     return JSONResponse({"url": webhook_url})
 
@@ -118,7 +118,7 @@ async def reset_webhook() -> JSONResponse:
     await APPLICATION.bot.set_webhook(
         url=webhook_url,
         secret_token=WEBHOOK_SECRET,
-        allowed_updates=[],
+        allowed_updates=["message", "callback_query", "chat_member"],
     )
     return JSONResponse({"reset_to": webhook_url})
 

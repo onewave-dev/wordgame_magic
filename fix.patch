@@ -1,190 +1,84 @@
-diff --git a/compose_word_game/word_game_app.py b/compose_word_game/word_game_app.py
-index 321f52d787a728fd5b0f527f059849843801f2ac..979a0832407dae84e75f2c15c7a24384a5a1d6b6 100644
---- a/compose_word_game/word_game_app.py
-+++ b/compose_word_game/word_game_app.py
-@@ -230,50 +230,51 @@ WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "/webhook")
- async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-     message = update.effective_message
-     code = context.args[0] if context.args else None
-     if code and code in JOIN_CODES:
-         gid = JOIN_CODES[code]
-         game = ACTIVE_GAMES.get(gid)
-         if game:
-             await add_player_via_invite(update.effective_user, game, context)
-         else:
-             if message:
-                 await reply_game_message(message, context, "Игра не найдена")
-         return
-     user = update.effective_user
-     game = create_dm_game(user.id)
-     if message:
-         await reply_game_message(message, context, f"Игра #{game.game_id} создана")
-     await request_name(user.id, update.effective_chat.id, context)
+diff --git a/app.py b/app.py
+index 8aec79f2b1be411b9eccfa8521e1c07137abc772..a4c37b96961cf716370416ab57b76c08ef5ed43f 100644
+--- a/app.py
++++ b/app.py
+@@ -59,76 +59,76 @@ async def choose_game(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
+         await grebeshok_game.newgame(update, context)
+     try:
+         await query.edit_message_reply_markup(None)
+     except Exception:
+         pass
  
  
- async def request_name(user_id: int, chat_id: int, context: CallbackContext) -> None:
-     await send_game_message(
-         chat_id,
-         None,
-         context,
-         "Введите ваше имя",
-+        reply_markup=ForceReply(selective=True),
+ @app.on_event("startup")
+ async def on_startup() -> None:
+     global APPLICATION
+     APPLICATION = Application.builder().token(TOKEN).build()
+     bot_username = (await APPLICATION.bot.get_me()).username
+     compose_game.BOT_USERNAME = bot_username
+     grebeshok_game.BOT_USERNAME = bot_username
+     APPLICATION.add_handler(CommandHandler("start", start))
+     APPLICATION.add_handler(CallbackQueryHandler(choose_game, pattern="^game_"))
+     await APPLICATION.initialize()
+     await APPLICATION.start()
+     if PUBLIC_URL:
+         webhook_url = f"{PUBLIC_URL.rstrip('/')}{WEBHOOK_PATH}"
+         info = await APPLICATION.bot.get_webhook_info()
+         if info.url != webhook_url:
+             await APPLICATION.bot.set_webhook(
+                 url=webhook_url,
+                 secret_token=WEBHOOK_SECRET,
+-                allowed_updates=[],
++                allowed_updates=["message", "callback_query", "chat_member"],
+             )
+ 
+ 
+ @app.on_event("shutdown")
+ async def on_shutdown() -> None:
+     await APPLICATION.stop()
+     await APPLICATION.shutdown()
+ 
+ 
+ @app.post(WEBHOOK_PATH)
+ async def telegram_webhook(request: Request) -> JSONResponse:
+     if request.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET:
+         raise HTTPException(status_code=403, detail="Invalid secret")
+     update = Update.de_json(await request.json(), APPLICATION.bot)
+     await APPLICATION.process_update(update)
+     return JSONResponse({"ok": True})
+ 
+ 
+ @app.get("/set_webhook")
+ async def set_webhook() -> JSONResponse:
+     webhook_url = f"{PUBLIC_URL.rstrip('/')}{WEBHOOK_PATH}"
+     await APPLICATION.bot.set_webhook(
+         url=webhook_url,
+         secret_token=WEBHOOK_SECRET,
+-        allowed_updates=[],
++        allowed_updates=["message", "callback_query", "chat_member"],
      )
+     return JSONResponse({"url": webhook_url})
  
  
- def create_dm_game(host_id: int) -> GameState:
-     """Create a direct-message game for the host."""
-     game_id = secrets.token_urlsafe(8)
-     game = GameState(host_id=host_id, game_id=game_id)
-     game.players[host_id] = Player(user_id=host_id)
-     game.player_chats[host_id] = host_id
-     ACTIVE_GAMES[game_id] = game
-     return game
+ @app.get("/reset_webhook")
+ async def reset_webhook() -> JSONResponse:
+     webhook_url = f"{PUBLIC_URL.rstrip('/')}{WEBHOOK_PATH}"
+     await APPLICATION.bot.delete_webhook(drop_pending_updates=False)
+     await APPLICATION.bot.set_webhook(
+         url=webhook_url,
+         secret_token=WEBHOOK_SECRET,
+-        allowed_updates=[],
++        allowed_updates=["message", "callback_query", "chat_member"],
+     )
+     return JSONResponse({"reset_to": webhook_url})
  
  
- async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-     user = update.effective_user
-     game = create_dm_game(user.id)
-     chat_id = update.effective_chat.id
-     if update.message:
-         await reply_game_message(update.message, context, f"Игра #{game.game_id} создана")
-     await request_name(user.id, chat_id, context)
+ @app.get("/")
+ async def root() -> JSONResponse:
+     return JSONResponse({"message": "Wordgame Magic service. See /healthz for status."})
  
  
- async def maybe_show_base_options(
-     chat_id: int,
-     thread_id: Optional[int],
-diff --git a/compose_word_game/word_game_app.py b/compose_word_game/word_game_app.py
-index 321f52d787a728fd5b0f527f059849843801f2ac..979a0832407dae84e75f2c15c7a24384a5a1d6b6 100644
---- a/compose_word_game/word_game_app.py
-+++ b/compose_word_game/word_game_app.py
-@@ -281,61 +282,66 @@ async def maybe_show_base_options(
-     game: Optional[GameState] = None,
- ) -> None:
-     """Send base word options to the host when conditions are met."""
-     if game is None:
-         game = get_game(chat_id, thread_id or 0)
-     if not game or game.status != "waiting":
-         return
-     if len(game.players) >= 2 and all(p.name for p in game.players.values()):
-         await send_game_message(
-             chat_id,
-             thread_id,
-             context,
-             "Выберите базовое слово:",
-             reply_markup=InlineKeyboardMarkup(
-                 [
-                     [
-                         InlineKeyboardButton("Вручную", callback_data="base_manual"),
-                         InlineKeyboardButton("Случайное", callback_data="base_random"),
-                     ]
-                 ]
-             ),
-         )
+ @app.get("/healthz")
+ async def healthz() -> JSONResponse:
+     return JSONResponse({"status": "ok"})
  
- 
- async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
--    chat = update.effective_chat
-+    message = update.message
-+    if not message or not message.reply_to_message:
-+        return
-+    if message.reply_to_message.from_user.id != context.bot.id:
-+        return
-+    chat = message.chat
-     chat_id = chat.id
-     user_id = update.effective_user.id
-     game = get_game(chat_id, None)
-     if not game:
-         return
-     game.player_chats[user_id] = chat.id
-     player = game.players.get(user_id)
-     if player and player.name:
-         return
--    name = update.message.text.strip()
-+    name = message.text.strip()
-     if not player:
-         if len(game.players) >= 5:
-             await reply_game_message(update.message, context, "Лобби заполнено")
-             raise ApplicationHandlerStop
-         player = Player(user_id=user_id, name=name)
-         game.players[user_id] = player
-         context.user_data["name"] = name
-         await reply_game_message(update.message, context, f"Имя установлено: {player.name}")
-         await broadcast(
-             game.game_id,
-             f"{bold_alnum(player.name)} присоединился к игре",
-             parse_mode="HTML",
-         )
-         host_chat = game.player_chats.get(game.host_id)
-         if host_chat:
-             await maybe_show_base_options(host_chat, None, context, game)
-         raise ApplicationHandlerStop
-     elif not player.name:
-         player.name = name
-         context.user_data["name"] = name
-         await reply_game_message(update.message, context, f"Имя установлено: {player.name}")
-         await broadcast(
-             game.game_id,
-             f"{bold_alnum(player.name)} присоединился к игре",
-             parse_mode="HTML",
-diff --git a/compose_word_game/word_game_app.py b/compose_word_game/word_game_app.py
-index 321f52d787a728fd5b0f527f059849843801f2ac..979a0832407dae84e75f2c15c7a24384a5a1d6b6 100644
---- a/compose_word_game/word_game_app.py
-+++ b/compose_word_game/word_game_app.py
-@@ -417,51 +423,55 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
-             one_time_keyboard=True,
-         )
-         await reply_game_message(
-             query.message,
-             context,
-             "Выберите способ приглашения:",
-             reply_markup=keyboard,
-         )
- 
- 
- async def add_player_via_invite(
-     user: User,
-     game: GameState,
-     context: CallbackContext,
- ) -> None:
-     """Helper to add a player to a game via an invite link or code."""
-     user_id = user.id
-     if user_id in game.players:
-         await context.bot.send_message(user_id, "Вы уже в игре")
-         return
-     if len(game.players) >= 5:
-         await context.bot.send_message(user_id, "Лобби заполнено")
-         return
-     game.players[user_id] = Player(user_id=user_id)
-     game.player_chats[user_id] = user_id
--    await context.bot.send_message(user_id, "Введите ваше имя")
-+    await context.bot.send_message(
-+        user_id,
-+        "Введите ваше имя",
-+        reply_markup=ForceReply(selective=True),
-+    )
- 
- 
- async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-     args = context.args
-     if not args:
-         await reply_game_message(update.message, context, "Укажите код приглашения")
-         return
-     join_code = args[0]
-     game_id = JOIN_CODES.get(join_code)
-     if not game_id:
-         await reply_game_message(update.message, context, "Неверный код")
-         return
-     game = ACTIVE_GAMES.get(game_id)
-     if not game:
-         await reply_game_message(update.message, context, "Игра не найдена")
-         return
-     await add_player_via_invite(update.effective_user, game, context)
- 
- 
- async def join_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-     query = update.callback_query
-     await query.answer()
-     data = query.data
-     join_code = data.split("_", 1)[1] if "_" in data else ""
-     game_id = JOIN_CODES.get(join_code)
