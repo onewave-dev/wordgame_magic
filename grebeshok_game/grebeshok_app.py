@@ -29,6 +29,7 @@ import random
 import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
+import asyncio
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -386,13 +387,53 @@ async def maybe_show_combos(game: GameState, context: CallbackContext) -> None:
         for i, combo in enumerate(game.combo_choices)
     ]
     markup = InlineKeyboardMarkup(buttons)
+    messages = []
     for uid, player in game.players.items():
         chat_id = game.player_chats.get(uid)
         if chat_id:
-            await context.bot.send_message(chat_id, "Выберите комбинацию:", reply_markup=markup)
+            msg = await context.bot.send_message(
+                chat_id,
+                "Выберите комбинацию (осталось 5 с):",
+                reply_markup=markup,
+            )
+            messages.append((chat_id, msg.message_id))
     game.status = "choosing"
-    job = context.job_queue.run_once(auto_pick_combo, 5, data=game_key_from_state(game))
-    game.jobs["auto_pick"] = job
+    task = asyncio.create_task(combo_countdown(game, context, messages, markup))
+    game.jobs["combo_countdown"] = task
+
+
+async def combo_countdown(
+    game: GameState,
+    context: CallbackContext,
+    messages: List[Tuple[int, int]],
+    markup: InlineKeyboardMarkup,
+) -> None:
+    """Update the combo selection messages with a countdown.
+
+    After five seconds, if no combination was chosen, automatically pick one.
+    """
+
+    remaining = 5
+    try:
+        while remaining > 0:
+            await asyncio.sleep(1)
+            if game.base_letters:
+                break
+            remaining -= 1
+            text = f"Выберите комбинацию (осталось {remaining} с):"
+            for chat_id, message_id in messages:
+                try:
+                    await context.bot.edit_message_text(
+                        text, chat_id=chat_id, message_id=message_id, reply_markup=markup
+                    )
+                except Exception:
+                    pass
+        if not game.base_letters:
+            await auto_pick_combo(game, context)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        game.jobs.pop("combo_countdown", None)
 
 
 def game_key_from_state(game: GameState) -> Tuple[int, int]:
@@ -417,10 +458,8 @@ async def send_start_prompt(game: GameState, context: CallbackContext) -> None:
     )
 
 
-async def auto_pick_combo(context: CallbackContext) -> None:
-    gid = context.job.data
-    game = ACTIVE_GAMES.get(gid)
-    if not game or game.base_letters:
+async def auto_pick_combo(game: GameState, context: CallbackContext) -> None:
+    if game.base_letters:
         return
     choice = random.choice(game.combo_choices)
     game.base_letters = tuple(ch.lower() for ch in choice)
@@ -455,9 +494,9 @@ async def combo_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             f"Буквы выбраны: {' • '.join(game.combo_choices[idx])}",
             context,
         )
-    job = game.jobs.pop("auto_pick", None)
-    if job:
-        job.schedule_removal()
+    task = game.jobs.pop("combo_countdown", None)
+    if task:
+        task.cancel()
     await send_start_prompt(game, context)
 
 
