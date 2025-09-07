@@ -135,6 +135,9 @@ ACTIVE_GAMES: Dict[Tuple[int, int], GameState] = {}
 # Invite join codes -> game key
 JOIN_CODES: Dict[str, Tuple[int, int]] = {}
 
+# Finished games stored for quick restart
+FINISHED_GAMES: Dict[Tuple[int, int], GameState] = {}
+
 
 def game_key(chat_id: int, thread_id: Optional[int]) -> Tuple[int, int]:
     return (chat_id, thread_id or 0)
@@ -503,7 +506,68 @@ async def finish_game(game: GameState, context: CallbackContext, reason: str) ->
     lines.append(f"🏆 **Победитель:** {winner_names}")
     text = "\n".join(lines)
     await broadcast(game, text, context)
+
+    # Prepare restart keyboard and send to players
+    keyboard = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("Новая игра", callback_data=f"restart_{gid[0]}_{gid[1]}")]]
+    )
+    for uid in list(game.players.keys()):
+        chat_id = game.player_chats.get(uid)
+        if chat_id:
+            try:
+                await context.bot.send_message(
+                    chat_id, "Сыграть ещё раз?", reply_markup=keyboard
+                )
+            except Exception:
+                pass
+
+    # Move game to finished store for possible restart
     ACTIVE_GAMES.pop(gid, None)
+    FINISHED_GAMES[gid] = game
+
+
+async def restart_game(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle the «Новая игра» button."""
+
+    query = update.callback_query
+    await query.answer()
+    try:
+        _, chat_id, thread_id = query.data.split("_")
+    except ValueError:
+        return
+    old_gid = (int(chat_id), int(thread_id))
+    old_game = FINISHED_GAMES.get(old_gid)
+    if not old_game or query.from_user.id not in old_game.players:
+        return
+
+    new_host_chat = query.message.chat
+    new_gid = game_key(new_host_chat.id, query.message.message_thread_id)
+    new_host_id = query.from_user.id
+
+    new_game = GameState(host_id=new_host_id)
+    for uid, player in old_game.players.items():
+        new_game.players[uid] = Player(user_id=uid, name=player.name)
+    new_game.player_chats = old_game.player_chats.copy()
+    new_game.player_chats[new_host_id] = new_host_chat.id
+    ACTIVE_GAMES[new_gid] = new_game
+    FINISHED_GAMES.pop(old_gid, None)
+
+    starter = new_game.players[new_host_id]
+    await broadcast(
+        new_game, f"{starter.name} начал(а) новую игру", context
+    )
+
+    buttons = [
+        [
+            InlineKeyboardButton("3 минуты", callback_data="time_3"),
+            InlineKeyboardButton("5 минут", callback_data="time_5"),
+        ]
+    ]
+    await context.bot.send_message(
+        new_host_chat.id,
+        "Выберите длительность игры:",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
 
 
 async def dummy_bot_word(context: CallbackContext) -> None:
@@ -595,6 +659,7 @@ def register_handlers(application: Application, include_start: bool = False) -> 
     application.add_handler(CallbackQueryHandler(combo_chosen, pattern="^combo_"))
     application.add_handler(CallbackQueryHandler(invite_contact, pattern="^contact_"))
     application.add_handler(CallbackQueryHandler(send_invite_link, pattern="^link_"))
+    application.add_handler(CallbackQueryHandler(restart_game, pattern="^restart_"))
     application.add_handler(
         MessageHandler(filters.TEXT & (~filters.COMMAND), handle_word),
         group=1,
