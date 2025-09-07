@@ -541,9 +541,13 @@ async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await reply_game_message(update.message, context, "Игра не запущена")
         return
     user_id = update.effective_user.id
-    if user_id != game.host_id:
-        await reply_game_message(update.message, context, "Только инициатор может прервать игру")
-        return
+    player = game.players.get(user_id)
+    name = player.name if player and player.name else update.effective_user.first_name
+    for cid, mid in game.jobs.pop("rand_msgs", []):
+        try:
+            await context.bot.delete_message(cid, mid)
+        except Exception:
+            pass
     for job in list(game.jobs.values()):
         try:
             job.schedule_removal()
@@ -556,8 +560,9 @@ async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await context.bot.delete_message(chat_id, msg_id)
         except Exception:
             pass
-    await reply_game_message(update.message, context, "Игра прервана")
-    await broadcast(game.game_id, "Игра прервана")
+    text = f"Игра прервана участником {name}. Вы можете начать заново, нажав /start"
+    await reply_game_message(update.message, context, text)
+    await broadcast(game.game_id, text)
     BASE_MSG_IDS.pop(game.game_id, None)
     ACTIVE_GAMES.pop(game.game_id, None)
 
