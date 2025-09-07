@@ -489,6 +489,19 @@ async def start_round(game: GameState, context: CallbackContext) -> None:
     if 0 in game.players:  # dummy bot
         game.jobs["dummy"] = context.job_queue.run_repeating(dummy_bot_word, 30, data=gid)
     await broadcast(game, "Игра началась!", context)
+    letters = " • ".join(ch.upper() for ch in game.base_letters)
+    for uid in list(game.players.keys()):
+        chat_id = game.player_chats.get(uid)
+        if chat_id:
+            try:
+                await context.bot.unpin_all_chat_messages(chat_id)
+            except Exception:
+                pass
+            try:
+                msg = await context.bot.send_message(chat_id, letters)
+                await context.bot.pin_chat_message(chat_id, msg.message_id)
+            except Exception as exc:
+                logger.warning("Pin to %s failed: %s", chat_id, exc)
 
 
 async def one_minute_warning(context: CallbackContext) -> None:
