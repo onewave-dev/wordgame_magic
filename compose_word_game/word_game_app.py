@@ -271,7 +271,7 @@ async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     game = create_dm_game(user.id)
     chat_id = update.effective_chat.id
     if update.message:
-        await reply_game_message(update.message, context, f"Игра #{game.game_id} создана")
+        await reply_game_message(update.message, context, "Игра создана")
     await request_name(user.id, chat_id, context)
 
 

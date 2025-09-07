@@ -227,17 +227,10 @@ async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     code = "".join(random.choices("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", k=6))
     JOIN_CODES[code] = gid
-
-    invite_keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Пригласить из контактов", callback_data=f"contact_{code}")],
-        [InlineKeyboardButton("Создать ссылку", callback_data=f"link_{code}")],
-    ])
+    context.user_data["invite_code"] = code
 
     context.user_data["awaiting_name"] = True
-    await message.reply_text(
-        f"Игра создана. Код для приглашения: {code}\nВведите ваше имя:",
-        reply_markup=invite_keyboard,
-    )
+    await message.reply_text("Игра создана. Введите ваше имя:")
 
 
 async def invite_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -246,10 +239,11 @@ async def invite_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     query = update.callback_query
     await query.answer()
     code = query.data.split("_", 1)[1]
+    context.user_data["invite_code"] = code
     button = KeyboardButton("Отправить контакт", request_contact=True)
     markup = ReplyKeyboardMarkup([[button]], resize_keyboard=True, one_time_keyboard=True)
     await query.message.reply_text(
-        f"Поделитесь контактом и отправьте ему код: {code}",
+        "Поделитесь контактом — бот отправит приглашение",
         reply_markup=markup,
     )
 
@@ -262,6 +256,24 @@ async def send_invite_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     code = query.data.split("_", 1)[1]
     link = f"https://t.me/{BOT_USERNAME}?start=join_{code}"
     await query.message.reply_text(f"Ссылка для приглашения:\n{link}")
+
+
+async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send an invite link to the shared contact without revealing the code."""
+
+    contact = update.effective_message.contact
+    code = context.user_data.get("invite_code")
+    if not contact or not code:
+        return
+    try:
+        bot = await context.bot.get_me()
+        link = f"https://t.me/{bot.username}?start=join_{code}"
+        if contact.user_id:
+            await context.bot.send_message(contact.user_id, f"Вас приглашают в игру: {link}")
+            await update.message.reply_text("Приглашение отправлено.")
+    except Exception as exc:  # pragma: no cover - network issues
+        logger.warning("Failed to send contact invite: %s", exc)
+        await update.message.reply_text("Не удалось отправить приглашение.")
 
 
 async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -329,6 +341,16 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.message.reply_text(f"Имя установлено: {name}")
     if game.status == "config" and user_id == game.host_id:
         game.status = "waiting"
+        code = context.user_data.get("invite_code")
+        if code:
+            invite_keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("Пригласить из контактов", callback_data=f"contact_{code}")],
+                [InlineKeyboardButton("Создать ссылку", callback_data=f"link_{code}")],
+            ])
+            await update.message.reply_text(
+                "Пригласите игроков:", reply_markup=invite_keyboard
+            )
+
         buttons = [
             [
                 InlineKeyboardButton("3 минуты", callback_data="time_3"),
@@ -758,6 +780,7 @@ def register_handlers(application: Application, include_start: bool = False) -> 
         MessageHandler(filters.TEXT & (~filters.COMMAND), handle_name),
         group=0,
     )
+    application.add_handler(MessageHandler(filters.CONTACT, handle_contact))
     application.add_handler(CallbackQueryHandler(time_selected, pattern="^(time_|adm_test)"))
     application.add_handler(CallbackQueryHandler(letters_selected, pattern="^letters_"))
     application.add_handler(CallbackQueryHandler(combo_chosen, pattern="^combo_"))
