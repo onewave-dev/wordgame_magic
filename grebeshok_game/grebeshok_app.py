@@ -677,7 +677,8 @@ async def dummy_bot_word(context: CallbackContext) -> None:
 
 async def handle_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = update.message.text.lower().replace("ё", "е")
-    if not re.fullmatch(r"[а-я]+", text):
+    words = text.split()
+    if not words:
         return
     chat = update.effective_chat
     gid = game_key(chat.id, update.message.message_thread_id)
@@ -689,33 +690,42 @@ async def handle_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not game or game.status != "running":
         return
     game.player_chats[user_id] = chat.id
-    if text not in DICTIONARY:
-        await update.message.reply_text("❌")
-        await update.message.reply_text(f"Отклонено: {text} (такого слова нет в словаре)")
-        return
-    if any(text.count(b) < 1 for b in game.base_letters):
-        await update.message.reply_text("❌")
-        await update.message.reply_text(f"Отклонено: {text} (слово не содержит все буквы)")
-        return
     player = game.players.get(user_id)
     if not player:
         return
-    if text in player.words:
+
+    accepted: list[str] = []
+    rejected: list[str] = []
+    for word in words:
+        if not re.fullmatch(r"[а-я]+", word):
+            rejected.append(f"{word} (недопустимые символы)")
+            continue
+        if word not in DICTIONARY:
+            rejected.append(f"{word} (такого слова нет в словаре)")
+            continue
+        if any(word.count(b) < 1 for b in game.base_letters):
+            rejected.append(f"{word} (слово не содержит все буквы)")
+            continue
+        if word in player.words:
+            rejected.append(f"{word} (вы уже использовали это слово)")
+            continue
+        if word in game.used_words:
+            rejected.append(f"{word} (уже использовано другим игроком)")
+            continue
+        player.words.append(word)
+        player.points += 1
+        game.used_words.add(word)
+        accepted.append(word)
+        await broadcast(game, f"{player.name}: {word}", context)
+        if sum(word.count(b) for b in game.base_letters) >= 6:
+            await broadcast(game, f"🔥 {player.name} прислал мощное слово!", context)
+
+    if accepted:
+        await update.message.reply_text("✅")
+        await update.message.reply_text("Зачтены: " + ", ".join(accepted))
+    if rejected:
         await update.message.reply_text("❌")
-        await update.message.reply_text(f"Отклонено: {text} (вы уже использовали это слово)")
-        return
-    if text in game.used_words:
-        await update.message.reply_text("❌")
-        await update.message.reply_text(f"Отклонено: {text} (уже использовано другим игроком)")
-        return
-    player.words.append(text)
-    player.points += 1
-    game.used_words.add(text)
-    await update.message.reply_text("✅")
-    await update.message.reply_text(f"Зачтено: {text}")
-    await broadcast(game, f"{player.name}: {text}", context)
-    if sum(text.count(b) for b in game.base_letters) >= 6:
-        await broadcast(game, f"🔥 {player.name} прислал мощное слово!", context)
+        await update.message.reply_text("Отклонены: " + ", ".join(rejected))
 
 
 # ---------------------------------------------------------------------------
