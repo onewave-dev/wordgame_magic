@@ -117,7 +117,7 @@ class Player:
 class GameState:
     host_id: int
     time_limit: int = 3  # minutes
-    letters_mode: int = 3
+    letters_mode: int = 0
     base_letters: Tuple[str, ...] = field(default_factory=tuple)
     players: Dict[int, Player] = field(default_factory=dict)
     used_words: Set[str] = field(default_factory=set)
@@ -283,8 +283,6 @@ async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     game.player_chats[user_id] = update.effective_chat.id
     context.user_data["awaiting_name"] = True
     await update.message.reply_text("Введите ваше имя:")
-    if game.status == "waiting" and len(game.players) >= 2 and game.combo_choices:
-        await maybe_show_combos(game, context)
 
 
 async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -341,7 +339,11 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
     else:
         await broadcast(game, f"{name} присоединился к игре", context)
-        await maybe_show_combos(game, context)
+        if len(game.players) >= 2:
+            if not game.letters_mode:
+                await prompt_letters_selection(game, context)
+            elif not game.combo_choices:
+                await maybe_show_combos(game, context)
     raise ApplicationHandlerStop
 
 
@@ -375,6 +377,15 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 chat.id, "Пригласите игроков:", reply_markup=markup
             )
 
+    await prompt_letters_selection(game, context)
+
+
+async def prompt_letters_selection(game: GameState, context: CallbackContext) -> None:
+    if len(game.players) < 2 or game.letters_mode:
+        return
+    chat_id = game.player_chats.get(game.host_id)
+    if not chat_id:
+        return
     keyboard = InlineKeyboardMarkup(
         [
             [
@@ -383,7 +394,7 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             ]
         ]
     )
-    await context.bot.send_message(chat.id, "Выберите режим:", reply_markup=keyboard)
+    await context.bot.send_message(chat_id, "Выберите режим:", reply_markup=keyboard)
 
 
 async def letters_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -392,7 +403,12 @@ async def letters_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     chat = query.message.chat
     gid = game_key(chat.id, query.message.message_thread_id)
     game = ACTIVE_GAMES.get(gid)
-    if not game or query.from_user.id != game.host_id:
+    if (
+        not game
+        or query.from_user.id != game.host_id
+        or game.letters_mode
+        or len(game.players) < 2
+    ):
         return
     game.letters_mode = int(query.data.split("_")[1])
     await query.edit_message_text("Режим выбран")
@@ -400,7 +416,7 @@ async def letters_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def maybe_show_combos(game: GameState, context: CallbackContext) -> None:
-    if game.status != "waiting" or len(game.players) < 2:
+    if game.status != "waiting" or len(game.players) < 2 or not game.letters_mode:
         return
     game.combo_choices = generate_combinations(game.letters_mode, game.viability_threshold)
     buttons = [
