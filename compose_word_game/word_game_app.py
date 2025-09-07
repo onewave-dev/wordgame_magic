@@ -252,8 +252,8 @@ async def request_name(user_id: int, chat_id: int, context: CallbackContext) -> 
         None,
         context,
         "Введите ваше имя",
-        reply_markup=ForceReply(selective=True),
     )
+    context.user_data["awaiting_name"] = True
 
 
 def create_dm_game(host_id: int) -> GameState:
@@ -305,24 +305,25 @@ async def maybe_show_base_options(
 
 async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.message
-    if not message or not message.reply_to_message:
-        return
-    if message.reply_to_message.from_user.id != context.bot.id:
+    if not message or not context.user_data.get("awaiting_name"):
         return
     chat = message.chat
     chat_id = chat.id
     user_id = update.effective_user.id
     game = get_game(chat_id, None)
     if not game:
+        context.user_data.pop("awaiting_name", None)
         return
     game.player_chats[user_id] = chat.id
     player = game.players.get(user_id)
     if player and player.name:
+        context.user_data.pop("awaiting_name", None)
         return
     name = message.text.strip()
     if not player:
         if len(game.players) >= 5:
             await reply_game_message(update.message, context, "Лобби заполнено")
+            context.user_data.pop("awaiting_name", None)
             raise ApplicationHandlerStop
         player = Player(user_id=user_id, name=name)
         game.players[user_id] = player
@@ -336,6 +337,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         host_chat = game.player_chats.get(game.host_id)
         if host_chat:
             await maybe_show_base_options(host_chat, None, context, game)
+        context.user_data.pop("awaiting_name", None)
         raise ApplicationHandlerStop
     elif not player.name:
         player.name = name
@@ -364,6 +366,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         host_chat = game.player_chats.get(game.host_id)
         if host_chat:
             await maybe_show_base_options(host_chat, None, context, game)
+        context.user_data.pop("awaiting_name", None)
         raise ApplicationHandlerStop
 
 
@@ -448,8 +451,8 @@ async def add_player_via_invite(
     await context.bot.send_message(
         user_id,
         "Введите ваше имя",
-        reply_markup=ForceReply(selective=True),
     )
+    context.user_data["awaiting_name"] = True
 
 
 async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -611,6 +614,7 @@ async def base_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             job = context.job_queue.run_repeating(
                 countdown,
                 interval=1,
+                first=0,
                 chat_id=cid,
                 data={
                     "thread_id": thread,
