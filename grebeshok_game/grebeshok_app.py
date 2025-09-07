@@ -692,6 +692,7 @@ async def start_round(game: GameState, context: CallbackContext) -> None:
     for uid in list(game.players.keys()):
         chat_id = game.player_chats.get(uid)
         if chat_id:
+            await context.bot.unpin_all_chat_messages(chat_id)
             await refresh_base_letters_button(chat_id, 0, context)
 
 
