@@ -385,7 +385,7 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 [KeyboardButton("Создать ссылку")],
             ]
             markup = ReplyKeyboardMarkup(
-                buttons, resize_keyboard=True, one_time_keyboard=True
+                buttons, resize_keyboard=True, one_time_keyboard=False
             )
             await context.bot.send_message(
                 chat.id, "Пригласите игроков:", reply_markup=markup
