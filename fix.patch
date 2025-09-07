@@ -1,82 +1,69 @@
-diff --git a/grebeshok_game/grebeshok_app.py b/grebeshok_game/grebeshok_app.py
-index 924a9bb07d5ac96e6df1c65f8a233403d37b54ee..5b05f7b7d05e59d767fb5d7812f2038d17056322 100644
---- a/grebeshok_game/grebeshok_app.py
-+++ b/grebeshok_game/grebeshok_app.py
-@@ -273,59 +273,68 @@ async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-     if not gid or gid not in ACTIVE_GAMES:
-         await update.message.reply_text("Игра не найдена.")
-         return
-     game = ACTIVE_GAMES[gid]
-     user_id = update.effective_user.id
-     if user_id in game.players:
-         await update.message.reply_text("Вы уже участвуете.")
-         return
-     if len(game.players) >= 5:
-         await update.message.reply_text("Лобби заполнено.")
-         return
-     game.players[user_id] = Player(user_id=user_id)
-     game.player_chats[user_id] = update.effective_chat.id
-     context.user_data["awaiting_name"] = True
-     await update.message.reply_text("Введите ваше имя:")
-     if game.status == "waiting" and len(game.players) >= 2 and game.combo_choices:
-         await maybe_show_combos(game, context)
+diff --git a/app.py b/app.py
+index a4c37b96961cf716370416ab57b76c08ef5ed43f..ae1b0b46f62e5418fad77cbbcdfea84a2a53fe77 100644
+--- a/app.py
++++ b/app.py
+@@ -9,50 +9,64 @@ from telegram.ext import (
+     Application,
+     CallbackQueryHandler,
+     CommandHandler,
+     ContextTypes,
+ )
+ 
+ import compose_word_game.word_game_app as compose_game
+ import grebeshok_game.grebeshok_app as grebeshok_game
  
  
- async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-     user_id = update.effective_user.id
-     game = next((g for g in ACTIVE_GAMES.values() if user_id in g.players), None)
-     if not game:
-         await update.message.reply_text("Вы не в игре.")
-         return
--    if user_id == game.host_id:
--        await finish_game(game, context, "Игра прервана хостом")
--        return
--    player = game.players.pop(user_id, None)
--    chat_id = game.player_chats.pop(user_id, None)
--    if chat_id:
--        await update.message.reply_text("Вы вышли из игры")
--    if player and player.name:
--        await broadcast(game, f"{player.name} вышел из игры", context)
-+    player = game.players.get(user_id)
-+    name = player.name if player and player.name else update.effective_user.first_name
-+    message = (
-+        f"Игра прервана участником {name}. Вы можете начать заново, нажав /start"
-+    )
-+    for job in game.jobs.values():
-+        try:
-+            job.schedule_removal()
-+        except Exception:
-+            try:
-+                job.cancel()
-+            except Exception:
-+                pass
-+    game.jobs.clear()
-+    await broadcast(game, message, context)
-+    await update.message.reply_text(message)
-+    gid = game_key_from_state(game)
-+    ACTIVE_GAMES.pop(gid, None)
+ TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+ PUBLIC_URL = os.environ.get("PUBLIC_URL")
+ WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
+ WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "/webhook")
+ 
+ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
+ logger = logging.getLogger(__name__)
+ 
+ app = FastAPI()
+ 
+ APPLICATION: Optional[Application] = None
+ REGISTERED_GAMES: Set[str] = set()
  
  
- async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-     if not context.user_data.get("awaiting_name"):
-         return
-     user_id = update.effective_user.id
-     name = update.message.text.strip()
-     game = next((g for g in ACTIVE_GAMES.values() if user_id in g.players), None)
-     if not game:
-         return
-     player = game.players[user_id]
-     player.name = name
-     context.user_data.pop("awaiting_name", None)
-     await update.message.reply_text(f"Имя установлено: {name}")
-     if game.status == "config" and user_id == game.host_id:
-         game.status = "waiting"
-         buttons = [
+ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
++    if context.args:
++        join_code = context.args[0]
++        if join_code in compose_game.JOIN_CODES:
++            if "compose" not in REGISTERED_GAMES:
++                compose_game.register_handlers(APPLICATION)
++                REGISTERED_GAMES.add("compose")
++            await compose_game.start_cmd(update, context)
++            return
++        if join_code.startswith("join_") or join_code in grebeshok_game.JOIN_CODES:
++            if "grebeshok" not in REGISTERED_GAMES:
++                grebeshok_game.register_handlers(APPLICATION)
++                REGISTERED_GAMES.add("grebeshok")
++            await grebeshok_game.start_cmd(update, context)
++            return
+     keyboard = InlineKeyboardMarkup(
+         [
              [
-                 InlineKeyboardButton("3 минуты", callback_data="time_3"),
-                 InlineKeyboardButton("5 минут", callback_data="time_5"),
+                 InlineKeyboardButton("Составь слово!", callback_data="game_compose"),
+                 InlineKeyboardButton("Гребешок", callback_data="game_grebeshok"),
              ]
          ]
-         if user_id == ADMIN_ID:
-             buttons.append([InlineKeyboardButton("[адм.] Тестовая игра", callback_data="adm_test")])
-         await update.message.reply_text(
+     )
+     if update.message:
+         await update.message.reply_text("Выберите игру:", reply_markup=keyboard)
+ 
+ 
+ async def choose_game(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+     query = update.callback_query
+     await query.answer()
+     game = query.data
+     if game == "game_compose":
+         if "compose" not in REGISTERED_GAMES:
+             compose_game.register_handlers(APPLICATION)
+             REGISTERED_GAMES.add("compose")
+         await compose_game.start_cmd(update, context)
+     elif game == "game_grebeshok":
+         if "grebeshok" not in REGISTERED_GAMES:
+             grebeshok_game.register_handlers(APPLICATION)
+             REGISTERED_GAMES.add("grebeshok")
