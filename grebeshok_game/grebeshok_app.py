@@ -37,6 +37,7 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     KeyboardButton,
+    KeyboardButtonRequestUsers,
     ReplyKeyboardMarkup,
     Update,
 )
@@ -57,6 +58,7 @@ PUBLIC_URL = os.environ.get("PUBLIC_URL", "")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "/webhook")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
+MESSAGE_RATE_LIMIT = float(os.environ.get("MESSAGE_RATE_LIMIT", "1"))
 
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
@@ -116,7 +118,7 @@ class Player:
 class GameState:
     host_id: int
     time_limit: int = 3  # minutes
-    letters_mode: int = 3
+    letters_mode: int = 0
     base_letters: Tuple[str, ...] = field(default_factory=tuple)
     players: Dict[int, Player] = field(default_factory=dict)
     used_words: Set[str] = field(default_factory=set)
@@ -227,41 +229,46 @@ async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     code = "".join(random.choices("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", k=6))
     JOIN_CODES[code] = gid
-
-    invite_keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Пригласить из контактов", callback_data=f"contact_{code}")],
-        [InlineKeyboardButton("Создать ссылку", callback_data=f"link_{code}")],
-    ])
+    context.user_data["invite_code"] = code
 
     context.user_data["awaiting_name"] = True
-    await message.reply_text(
-        f"Игра создана. Код для приглашения: {code}\nВведите ваше имя:",
-        reply_markup=invite_keyboard,
-    )
+    await message.reply_text("Игра создана. Введите ваше имя:")
 
 
-async def invite_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle the "Пригласить из контактов" button."""
+async def invite_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send deep-link invitation to the host on text button press."""
 
-    query = update.callback_query
-    await query.answer()
-    code = query.data.split("_", 1)[1]
-    button = KeyboardButton("Отправить контакт", request_contact=True)
-    markup = ReplyKeyboardMarkup([[button]], resize_keyboard=True, one_time_keyboard=True)
-    await query.message.reply_text(
-        f"Поделитесь контактом и отправьте ему код: {code}",
-        reply_markup=markup,
-    )
-
-
-async def send_invite_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send deep-link invitation to the host."""
-
-    query = update.callback_query
-    await query.answer()
-    code = query.data.split("_", 1)[1]
+    code = context.user_data.get("invite_code")
+    if not code:
+        return
     link = f"https://t.me/{BOT_USERNAME}?start=join_{code}"
-    await query.message.reply_text(f"Ссылка для приглашения:\n{link}")
+    await update.message.reply_text(f"Ссылка для приглашения:\n{link}")
+
+
+async def users_shared_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.message
+    if not message or not message.users_shared:
+        return
+    shared = message.users_shared
+    chat_id = update.effective_chat.id
+    thread_id = update.effective_message.message_thread_id
+    game = get_game(chat_id, thread_id or 0)
+    if not game:
+        return
+    code = context.user_data.get("invite_code")
+    if not code:
+        gid = game_key(chat_id, thread_id)
+        code = next((c for c, g in JOIN_CODES.items() if g == gid), None)
+        if not code:
+            return
+        context.user_data["invite_code"] = code
+    link = f"https://t.me/{BOT_USERNAME}?start=join_{code}"
+    for u in shared.users:
+        try:
+            await context.bot.send_message(u.user_id, f"Вас приглашают в игру: {link}")
+        except Exception:
+            continue
+    await update.message.reply_text("Приглашения отправлены")
 
 
 async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -285,8 +292,6 @@ async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     game.player_chats[user_id] = update.effective_chat.id
     context.user_data["awaiting_name"] = True
     await update.message.reply_text("Введите ваше имя:")
-    if game.status == "waiting" and len(game.players) >= 2 and game.combo_choices:
-        await maybe_show_combos(game, context)
 
 
 async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -328,7 +333,6 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     context.user_data.pop("awaiting_name", None)
     await update.message.reply_text(f"Имя установлено: {name}")
     if game.status == "config" and user_id == game.host_id:
-        game.status = "waiting"
         buttons = [
             [
                 InlineKeyboardButton("3 минуты", callback_data="time_3"),
@@ -336,13 +340,19 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             ]
         ]
         if user_id == ADMIN_ID:
-            buttons.append([InlineKeyboardButton("[адм.] Тестовая игра", callback_data="adm_test")])
+            buttons.append([
+                InlineKeyboardButton("[адм.] Тестовая игра", callback_data="adm_test")
+            ])
         await update.message.reply_text(
             "Выберите длительность игры:", reply_markup=InlineKeyboardMarkup(buttons)
         )
     else:
         await broadcast(game, f"{name} присоединился к игре", context)
-        await maybe_show_combos(game, context)
+        if len(game.players) >= 2:
+            if not game.letters_mode:
+                await prompt_letters_selection(game, context)
+            elif not game.combo_choices:
+                await maybe_show_combos(game, context)
     raise ApplicationHandlerStop
 
 
@@ -362,7 +372,34 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     elif query.data.startswith("time_"):
         game.time_limit = int(query.data.split("_")[1])
         await query.edit_message_text("Длительность установлена")
+        game.status = "waiting"
+        code = context.user_data.get("invite_code")
+        if code:
+            buttons = [
+                [
+                    KeyboardButton(
+                        "Пригласить из контактов",
+                        request_users=KeyboardButtonRequestUsers(request_id=1),
+                    )
+                ],
+                [KeyboardButton("Создать ссылку")],
+            ]
+            markup = ReplyKeyboardMarkup(
+                buttons, resize_keyboard=True, one_time_keyboard=True
+            )
+            await context.bot.send_message(
+                chat.id, "Пригласите игроков:", reply_markup=markup
+            )
 
+    await prompt_letters_selection(game, context)
+
+
+async def prompt_letters_selection(game: GameState, context: CallbackContext) -> None:
+    if len(game.players) < 2 or game.letters_mode:
+        return
+    chat_id = game.player_chats.get(game.host_id)
+    if not chat_id:
+        return
     keyboard = InlineKeyboardMarkup(
         [
             [
@@ -371,7 +408,7 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             ]
         ]
     )
-    await context.bot.send_message(chat.id, "Выберите режим:", reply_markup=keyboard)
+    await context.bot.send_message(chat_id, "Выберите режим:", reply_markup=keyboard)
 
 
 async def letters_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -380,7 +417,12 @@ async def letters_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     chat = query.message.chat
     gid = game_key(chat.id, query.message.message_thread_id)
     game = ACTIVE_GAMES.get(gid)
-    if not game or query.from_user.id != game.host_id:
+    if (
+        not game
+        or query.from_user.id != game.host_id
+        or game.letters_mode
+        or len(game.players) < 2
+    ):
         return
     game.letters_mode = int(query.data.split("_")[1])
     await query.edit_message_text("Режим выбран")
@@ -388,7 +430,7 @@ async def letters_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def maybe_show_combos(game: GameState, context: CallbackContext) -> None:
-    if game.status != "waiting" or len(game.players) < 2:
+    if game.status != "waiting" or len(game.players) < 2 or not game.letters_mode:
         return
     game.combo_choices = generate_combinations(game.letters_mode, game.viability_threshold)
     buttons = [
@@ -685,6 +727,15 @@ async def dummy_bot_word(context: CallbackContext) -> None:
 
 
 async def handle_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    now = asyncio.get_running_loop().time()
+    last_time = context.user_data.get("last_message_time")
+    if last_time and now - last_time < MESSAGE_RATE_LIMIT:
+        await update.message.reply_text("Слишком часто! Подождите немного.")
+        context.user_data["last_message_time"] = now
+        logger.debug("Rate limit hit for user %s", update.effective_user.id)
+        return
+    context.user_data["last_message_time"] = now
+
     text = update.message.text.lower().replace("ё", "е")
     words = text.split()
     if not words:
@@ -758,12 +809,17 @@ def register_handlers(application: Application, include_start: bool = False) -> 
         MessageHandler(filters.TEXT & (~filters.COMMAND), handle_name),
         group=0,
     )
+    application.add_handler(
+        MessageHandler(filters.Regex("^Создать ссылку$"), invite_link),
+        group=0,
+    )
+    application.add_handler(
+        MessageHandler(filters.StatusUpdate.USERS_SHARED, users_shared_handler)
+    )
     application.add_handler(CallbackQueryHandler(time_selected, pattern="^(time_|adm_test)"))
     application.add_handler(CallbackQueryHandler(letters_selected, pattern="^letters_"))
     application.add_handler(CallbackQueryHandler(combo_chosen, pattern="^combo_"))
     application.add_handler(CallbackQueryHandler(start_round_cb, pattern="^start_round$"))
-    application.add_handler(CallbackQueryHandler(invite_contact, pattern="^contact_"))
-    application.add_handler(CallbackQueryHandler(send_invite_link, pattern="^link_"))
     application.add_handler(CallbackQueryHandler(restart_game, pattern="^restart_"))
     application.add_handler(
         MessageHandler(filters.TEXT & (~filters.COMMAND), handle_word),
