@@ -30,6 +30,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 import asyncio
+import html
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -180,12 +181,20 @@ def generate_combinations(mode: int, viability_threshold: int) -> List[Tuple[str
     return combos
 
 
-async def broadcast(game: GameState, text: str, context: CallbackContext) -> None:
+async def broadcast(
+    game: GameState,
+    text: str,
+    context: CallbackContext,
+    reply_markup=None,
+    parse_mode: Optional[str] = None,
+) -> None:
     for uid in list(game.players.keys()):
         chat_id = game.player_chats.get(uid)
         if chat_id:
             try:
-                await context.bot.send_message(chat_id, text)
+                await context.bot.send_message(
+                    chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode
+                )
             except Exception as exc:  # pragma: no cover - network issues
                 logger.warning("Broadcast to %s failed: %s", chat_id, exc)
 
@@ -622,28 +631,44 @@ async def finish_game(game: GameState, context: CallbackContext, reason: str) ->
     players_sorted = sorted(
         game.players.values(), key=lambda p: p.points, reverse=True
     )
-    max_points = players_sorted[0].points if players_sorted else 0
-    winner_names = ", ".join(
-        p.name for p in players_sorted if p.points == max_points
-    )
+
+    def format_name(player: Player) -> str:
+        name = player.name
+        if player.user_id == 0 or name.lower() in {"bot", "бот"}:
+            name = f"🤖 {name}"
+        return name
+
     lines = [
-        "**Игра окончена! Результаты**:",
+        "<b>Игра окончена!</b>",
+        "<b>Результаты:</b>",
         "",
-        f"**Буквы:** {letters}",
+        f"<b>Буквы:</b> {letters}",
         "",
     ]
-    for player in players_sorted:
-        lines.append(player.name)
-        lines.append("Слова:")
-        for word in player.words:
-            lines.append(f"  {word}")
-        lines.append(f"**Итог:** {player.points}")
+    for p in players_sorted:
+        lines.append(html.escape(format_name(p)))
+        for i, w in enumerate(p.words, 1):
+            lines.append(f"{i}. {html.escape(w)}")
+        lines.append(f"<b>Итог:</b> {p.points}")
         lines.append("")
     if lines and lines[-1] == "":
         lines.pop()
-    lines.append(f"🏆 **Победитель:** {winner_names}")
-    text = "\n".join(lines)
-    await broadcast(game, text, context)
+
+    max_points = players_sorted[0].points if players_sorted else 0
+    winners = [p for p in players_sorted if p.points == max_points]
+    if winners:
+        if len(winners) == 1:
+            lines.append(
+                f"🏆 <b>Победитель:</b> {html.escape(format_name(winners[0]))}"
+            )
+        else:
+            lines.append(
+                "🏆 <b>Победители:</b> "
+                + ", ".join(html.escape(format_name(p)) for p in winners)
+            )
+
+    text = "\n".join(lines).rstrip()
+    await broadcast(game, text, context, parse_mode="HTML")
 
     # Prepare restart keyboard and send to players
     keyboard = InlineKeyboardMarkup(
