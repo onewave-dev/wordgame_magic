@@ -250,6 +250,7 @@ async def users_shared_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     if not message or not message.users_shared:
         return
     shared = message.users_shared
+    count = len(shared.users)
     chat_id = update.effective_chat.id
     thread_id = update.effective_message.message_thread_id
     game = get_game(chat_id, thread_id or 0)
@@ -268,7 +269,8 @@ async def users_shared_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             await context.bot.send_message(u.user_id, f"Вас приглашают в игру: {link}")
         except Exception:
             continue
-    await update.message.reply_text("Приглашения отправлены")
+    text = "Приглашение отправлено" if count == 1 else "Приглашения отправлены"
+    await update.message.reply_text(text)
 
 
 async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
