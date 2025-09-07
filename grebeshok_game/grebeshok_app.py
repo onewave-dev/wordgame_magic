@@ -434,10 +434,31 @@ async def finish_game(game: GameState, context: CallbackContext, reason: str) ->
         except Exception:
             pass
     game.status = "finished"
-    scores = sorted(
-        ((p.points, p.name) for p in game.players.values()), reverse=True
+    letters = " • ".join(ch.upper() for ch in game.base_letters)
+    players_sorted = sorted(
+        game.players.values(), key=lambda p: p.points, reverse=True
     )
-    text = reason + "\n" + "\n".join(f"{name}: {pts}" for pts, name in scores)
+    max_points = players_sorted[0].points if players_sorted else 0
+    winner_names = ", ".join(
+        p.name for p in players_sorted if p.points == max_points
+    )
+    lines = [
+        "**Игра окончена! Результаты**:",
+        "",
+        f"**Буквы:** {letters}",
+        "",
+    ]
+    for player in players_sorted:
+        lines.append(player.name)
+        lines.append("Слова:")
+        for word in player.words:
+            lines.append(f"  {word}")
+        lines.append(f"**Итог:** {player.points}")
+        lines.append("")
+    if lines and lines[-1] == "":
+        lines.pop()
+    lines.append(f"🏆 **Победитель:** {winner_names}")
+    text = "\n".join(lines)
     await broadcast(game, text, context)
     ACTIVE_GAMES.pop(gid, None)
 
