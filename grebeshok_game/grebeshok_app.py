@@ -136,6 +136,9 @@ class GameState:
 # Mapping ``(chat_id, thread_id) -> GameState``
 ACTIVE_GAMES: Dict[Tuple[int, int], GameState] = {}
 
+# Mapping personal chat IDs to running games for quick lookup
+CHAT_GAMES: Dict[int, GameState] = {}
+
 # Invite join codes -> game key
 JOIN_CODES: Dict[str, Tuple[int, int]] = {}
 
@@ -152,7 +155,17 @@ def game_key(chat_id: int, thread_id: Optional[int]) -> Tuple[int, int]:
 
 
 def get_game(chat_id: int, thread_id: Optional[int]) -> Optional[GameState]:
-    return ACTIVE_GAMES.get(game_key(chat_id, thread_id))
+    game = CHAT_GAMES.get(chat_id)
+    if game:
+        return game
+    gid = game_key(chat_id, thread_id)
+    game = ACTIVE_GAMES.get(gid)
+    if game:
+        return game
+    for g in ACTIVE_GAMES.values():
+        if chat_id in g.player_chats.values():
+            return g
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -380,7 +393,9 @@ async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await reply_game_message(update.message, context, "Лобби заполнено.")
         return
     game.players[user_id] = Player(user_id=user_id)
-    game.player_chats[user_id] = update.effective_chat.id
+    chat_id = update.effective_chat.id
+    game.player_chats[user_id] = chat_id
+    CHAT_GAMES[chat_id] = game
     context.user_data["awaiting_name"] = True
     await reply_game_message(update.message, context, "Введите ваше имя:")
 
@@ -407,6 +422,8 @@ async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     game.jobs.clear()
     await broadcast(game, message, context)
     await reply_game_message(update.message, context, message)
+    for cid in list(game.player_chats.values()):
+        CHAT_GAMES.pop(cid, None)
     gid = game_key_from_state(game)
     ACTIVE_GAMES.pop(gid, None)
 
@@ -784,6 +801,8 @@ async def finish_game(game: GameState, context: CallbackContext, reason: str) ->
                 )
             except Exception:
                 pass
+    for cid in list(game.player_chats.values()):
+        CHAT_GAMES.pop(cid, None)
 
     # Move game to finished store for possible restart
     ACTIVE_GAMES.pop(gid, None)
@@ -885,6 +904,7 @@ async def handle_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not game or game.status != "running":
         return
     game.player_chats[user_id] = chat.id
+    CHAT_GAMES[chat.id] = game
     player = game.players.get(user_id)
     if not player:
         return
