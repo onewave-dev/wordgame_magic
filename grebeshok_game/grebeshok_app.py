@@ -205,6 +205,7 @@ async def broadcast(
     reply_markup=None,
     parse_mode: Optional[str] = None,
     refresh: bool = True,
+    skip_chat_id: Optional[int] = None,
 ) -> None:
     for uid in list(game.players.keys()):
         chat_id = game.player_chats.get(uid)
@@ -213,7 +214,7 @@ async def broadcast(
                 await context.bot.send_message(
                     chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode
                 )
-                if refresh:
+                if refresh and chat_id != skip_chat_id:
                     schedule_refresh_base_letters(chat_id, 0, context)
             except Exception as exc:  # pragma: no cover - network issues
                 logger.warning("Broadcast to %s failed: %s", chat_id, exc)
@@ -931,9 +932,16 @@ async def handle_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         player.points += 1
         game.used_words.add(word)
         accepted.append(word)
-        await broadcast(game, f"{player.name}: {word}", context)
+        await broadcast(
+            game, f"{player.name}: {word}", context, skip_chat_id=chat.id
+        )
         if sum(word.count(b) for b in game.base_letters) >= 6:
-            await broadcast(game, f"🔥 {player.name} прислал мощное слово!", context)
+            await broadcast(
+                game,
+                f"🔥 {player.name} прислал мощное слово!",
+                context,
+                skip_chat_id=chat.id,
+            )
 
     if accepted:
         await reply_game_message(update.message, context, "✅")
@@ -945,6 +953,10 @@ async def handle_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await reply_game_message(
             update.message, context, "Отклонены: " + ", ".join(rejected)
         )
+
+    await refresh_base_letters_button(
+        chat.id, update.message.message_thread_id or 0, context
+    )
 
 
 # ---------------------------------------------------------------------------
