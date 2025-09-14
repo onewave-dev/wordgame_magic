@@ -313,11 +313,11 @@ async def reply_game_message(message, context: CallbackContext, text: str, **kwa
     return msg
 
 
-async def awaiting_name_guard(
+async def awaiting_grebeshok_name_guard(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Ensure the user supplies a name before processing commands."""
-    if not context.user_data.get("awaiting_name"):
+    if not context.user_data.get("awaiting_grebeshok_name"):
         return
     message = update.effective_message
     if not message:
@@ -377,7 +377,7 @@ async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     JOIN_CODES[code] = gid
     context.user_data["invite_code"] = code
 
-    context.user_data["awaiting_name"] = True
+    context.user_data["awaiting_grebeshok_name"] = True
     await reply_game_message(message, context, "Игра создана. Введите ваше имя:")
 
 
@@ -440,7 +440,7 @@ async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     game.player_chats[user_id] = chat_id
     CHAT_GAMES[chat_id] = game
-    context.user_data["awaiting_name"] = True
+    context.user_data["awaiting_grebeshok_name"] = True
     await reply_game_message(update.message, context, "Введите ваше имя:")
 
 
@@ -478,7 +478,7 @@ async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not context.user_data.get("awaiting_name"):
+    if not context.user_data.get("awaiting_grebeshok_name"):
         return
     user_id = update.effective_user.id
     name = update.message.text.strip()
@@ -487,7 +487,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     player = game.players[user_id]
     player.name = name
-    context.user_data.pop("awaiting_name", None)
+    context.user_data.pop("awaiting_grebeshok_name", None)
     formatted_name = format_player_name(player)
     await reply_game_message(
         update.message, context, f"Имя установлено: {formatted_name}"
@@ -1050,7 +1050,7 @@ def register_handlers(application: Application, include_start: bool = False) -> 
         application.add_handler(CommandHandler("start", start_cmd))
     # Guard to require players to introduce themselves first
     application.add_handler(
-        MessageHandler(filters.COMMAND, awaiting_name_guard), group=-1
+        MessageHandler(filters.COMMAND, awaiting_grebeshok_name_guard), group=-1
     )
     application.add_handler(CommandHandler("newgame", newgame))
     application.add_handler(CommandHandler("join", join_cmd))
