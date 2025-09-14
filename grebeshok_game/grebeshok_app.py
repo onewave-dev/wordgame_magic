@@ -53,6 +53,8 @@ from telegram.ext import (
     filters,
 )
 
+from llm_utils import describe_word
+
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "")
@@ -879,6 +881,26 @@ async def dummy_bot_word(context: CallbackContext) -> None:
     await broadcast(game, f"Бот: {word}", context)
 
 
+async def question_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.message
+    if not message or not message.text:
+        return
+    text = message.text.strip()
+    if not text.startswith("?"):
+        return
+    word = text[1:].strip().split()[0].lower().replace("ё", "е")
+    if not word:
+        return
+    prefix = (
+        "Есть такое слово в словаре."
+        if word in DICTIONARY
+        else "Этого слова нет в словаре игры"
+    )
+    llm_text = await describe_word(word)
+    await message.reply_text(f"{prefix}\n\n{llm_text}")
+    raise ApplicationHandlerStop
+
+
 async def handle_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     now = asyncio.get_running_loop().time()
     last_time = context.user_data.get("last_message_time")
@@ -986,6 +1008,13 @@ def register_handlers(application: Application, include_start: bool = False) -> 
     )
     application.add_handler(
         MessageHandler(filters.StatusUpdate.USERS_SHARED, users_shared_handler)
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.ChatType.PRIVATE & filters.Regex(r'^\?'),
+            question_word,
+        ),
+        group=1,
     )
     application.add_handler(CallbackQueryHandler(time_selected, pattern="^(time_|adm_test)"))
     application.add_handler(CallbackQueryHandler(letters_selected, pattern="^letters_"))
