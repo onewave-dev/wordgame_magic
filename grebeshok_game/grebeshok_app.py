@@ -130,6 +130,7 @@ class GameState:
     combo_choices: List[Tuple[str, ...]] = field(default_factory=list)
     viability_threshold: int = int(os.getenv("VIABILITY_THRESHOLD", "50"))
     player_chats: Dict[int, int] = field(default_factory=dict)
+    base_msg_counts: Dict[Tuple[int, int], int] = field(default_factory=dict)
 
     def game_id(self, chat_id: int, thread_id: Optional[int]) -> Tuple[int, int]:
         return (chat_id, thread_id or 0)
@@ -252,9 +253,16 @@ async def refresh_base_letters_button(
         except Exception:
             pass
     letters = " • ".join(ch.upper() for ch in game.base_letters)
+    count = game.base_msg_counts.get(key, 0) + 1
+    game.base_msg_counts[key] = count
+    prefix = ""
+    if count >= 5 and (count - 5) % 7 == 0:
+        prefix = (
+            "Можете отправлять знак ? и слово, чтобы проверить определение любого слова у ИИ.\n"
+        )
     msg = await context.bot.send_message(
         chat_id,
-        "Используйте буквы:",
+        prefix + "Используйте буквы:",
         reply_markup=InlineKeyboardMarkup(
             [[InlineKeyboardButton(letters, callback_data="noop")]]
         ),
@@ -750,6 +758,13 @@ async def start_round(game: GameState, context: CallbackContext) -> None:
     if 0 in game.players:  # dummy bot
         game.jobs["dummy"] = context.job_queue.run_repeating(dummy_bot_word, 30, data=gid)
     await broadcast(game, "Игра началась!", context, refresh=False)
+    await broadcast(
+        game,
+        "<b>Новая функция</b>: в игре можно отправлять знак ? и слово, чтобы проверить определение любого слова у ИИ.",
+        context,
+        parse_mode="HTML",
+        refresh=False,
+    )
     for uid in list(game.players.keys()):
         chat_id = game.player_chats.get(uid)
         if chat_id:
