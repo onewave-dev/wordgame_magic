@@ -951,17 +951,23 @@ async def restart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             reply_markup=InlineKeyboardMarkup(buttons),
         )
     else:
-        await broadcast(
-            game.game_id,
-            "Игра завершена. Для новой игры с новыми участниками нажмите /start",
+        text = (
+            "Игра завершена. Для новой игры с новыми участниками нажмите /start"
         )
+        await query.edit_message_text(text)
         BASE_MSG_IDS.pop(game.game_id, None)
+        sent: Set[int] = set()
+        for cid in game.player_chats.values():
+            if cid == chat_id or cid in sent:
+                continue
+            try:
+                await context.bot.send_message(cid, text)
+            except TelegramError:
+                pass
+            sent.add(cid)
         for cid in set(game.player_chats.values()):
             CHAT_GAMES.pop((cid, 0), None)
         ACTIVE_GAMES.pop(game.game_id, None)
-        await query.edit_message_text(
-            "Игра завершена. Для новой игры с новыми участниками нажмите /start"
-        )
 
 async def question_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.message
