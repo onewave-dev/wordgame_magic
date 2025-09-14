@@ -131,7 +131,13 @@ def get_game(chat_id: int, thread_id: Optional[int]) -> Optional[GameState]:
     return None
 
 
-async def broadcast(game_id: str, text: str, reply_markup=None, parse_mode=None) -> None:
+async def broadcast(
+    game_id: str,
+    text: str,
+    reply_markup=None,
+    parse_mode=None,
+    skip_chat_id: Optional[int] = None,
+) -> None:
     """Send a message to all player chats."""
     if not APPLICATION:
         return
@@ -140,7 +146,7 @@ async def broadcast(game_id: str, text: str, reply_markup=None, parse_mode=None)
         return
     sent: Set[int] = set()
     for cid in game.player_chats.values():
-        if cid in sent:
+        if cid == skip_chat_id or cid in sent:
             continue
         try:
             await APPLICATION.bot.send_message(
@@ -616,7 +622,7 @@ async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             pass
     text = f"Игра прервана участником {name}. Вы можете начать заново, нажав /start"
     await reply_game_message(update.message, context, text)
-    await broadcast(game.game_id, text)
+    await broadcast(game.game_id, text, skip_chat_id=chat_id)
     BASE_MSG_IDS.pop(game.game_id, None)
     for cid in set(game.player_chats.values()):
         CHAT_GAMES.pop((cid, 0), None)
