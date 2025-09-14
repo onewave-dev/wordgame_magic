@@ -247,9 +247,12 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     user = update.effective_user
     game = create_dm_game(user.id)
+    text = "Игра создана. Введите ваше имя:"
     if message:
-        await reply_game_message(message, context, f"Игра #{game.game_id} создана")
-    await request_name(user.id, update.effective_chat.id, context)
+        await reply_game_message(message, context, text)
+    else:
+        await send_game_message(update.effective_chat.id, None, context, text)
+    context.user_data["awaiting_name"] = True
 
 
 async def request_name(user_id: int, chat_id: int, context: CallbackContext) -> None:
@@ -277,9 +280,12 @@ async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     game = create_dm_game(user.id)
     chat_id = update.effective_chat.id
+    text = "Игра создана. Введите ваше имя:"
     if update.message:
-        await reply_game_message(update.message, context, "Игра создана")
-    await request_name(user.id, chat_id, context)
+        await reply_game_message(update.message, context, text)
+    else:
+        await send_game_message(chat_id, None, context, text)
+    context.user_data["awaiting_name"] = True
 
 
 async def maybe_show_base_options(
