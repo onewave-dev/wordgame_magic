@@ -1,6 +1,6 @@
 """Utilities for querying LLM about Russian words using LangChain."""
 
-from langchain.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
 
