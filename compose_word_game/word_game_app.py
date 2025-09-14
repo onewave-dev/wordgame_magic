@@ -36,6 +36,7 @@ from telegram.ext import (
     filters,
 )
 from telegram.error import TelegramError
+from llm_utils import describe_word
 
 # --- Utilities --------------------------------------------------------------
 
@@ -962,6 +963,25 @@ async def restart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "Игра завершена. Для новой игры с новыми участниками нажмите /start"
         )
 
+async def question_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.message
+    if not message or not message.text:
+        return
+    text = message.text.strip()
+    if not text.startswith("?"):
+        return
+    word = normalize_word(text[1:].strip())
+    if not word:
+        return
+    prefix = (
+        "Есть такое слово в словаре."
+        if word in DICT
+        else "Этого слова нет в словаре игры"
+    )
+    llm_text = await describe_word(word)
+    await message.reply_text(f"{prefix}\n\n{llm_text}")
+    raise ApplicationHandlerStop
+
 
 async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     start_ts = perf_counter()
@@ -1267,6 +1287,14 @@ def register_handlers(application: Application, include_start: bool = False) -> 
         )
     )
     # 2) Поднять основной обработчик слов выше прочих текстовых; он неблокирующий
+    application.add_handler(
+        MessageHandler(
+            filters.ChatType.PRIVATE & filters.Regex(r'^\?'),
+            question_word,
+            block=False,
+        ),
+        group=1,
+    )
     application.add_handler(
         MessageHandler(filters.TEXT & (~filters.COMMAND), word_message, block=False),
         group=1,
