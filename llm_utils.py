@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from typing import Optional, Tuple
 
 from bs4 import BeautifulSoup
@@ -37,19 +38,28 @@ def lookup_wiktionary(word: str) -> Optional[Tuple[bool, bool, str]]:
     if soup.find(class_="noarticletext"):
         return (False, False, "")
 
-    noun_span = soup.find("span", id="Существительное")
+    noun_span = soup.find("span", id=re.compile(r"^Существительное"))
     if not noun_span:
-        return (True, False, "")
+        logger.info("Noun heading not found for word '%s'", word)
+        return None
 
-    definition_span = noun_span.find_next("span", id="Значение")
-    if definition_span:
-        ol = definition_span.parent.find_next_sibling("ol")
-        if ol:
-            first_li = ol.find("li")
-            if first_li:
-                definition = first_li.get_text(" ", strip=True)
-                return (True, True, definition)
-    return (True, True, "")
+    definition_span = noun_span.find_next("span", id=re.compile(r"^Значение"))
+    if not definition_span:
+        logger.info("Definition heading not found for word '%s'", word)
+        return None
+
+    ol = definition_span.find_next("ol")
+    if not ol:
+        logger.info("Definition list not found for word '%s'", word)
+        return None
+
+    first_li = ol.find("li")
+    if not first_li:
+        logger.info("No definitions found for word '%s'", word)
+        return None
+
+    definition = first_li.get_text(" ", strip=True)
+    return (True, True, definition)
 
 
 _prompt = PromptTemplate(
