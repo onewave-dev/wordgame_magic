@@ -364,7 +364,13 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     user_id = update.effective_user.id
     game = get_game(chat_id, None)
     if not game:
+        logger.debug(
+            "handle_name: game not found for chat_id=%s user_id=%s", chat_id, user_id
+        )
         context.user_data.pop("awaiting_name", None)
+        await reply_game_message(
+            message, context, "Игра не найдена, начните заново командой /start"
+        )
         return
     game.player_chats[user_id] = chat.id
     CHAT_GAMES[(chat.id, 0)] = game.game_id
