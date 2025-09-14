@@ -360,6 +360,8 @@ async def maybe_show_base_options(
 
 
 async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not context.user_data.get("awaiting_name"):
+        return
     message = update.message
     if not message:
         return
@@ -384,13 +386,9 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     game.player_chats[user_id] = chat.id
     CHAT_GAMES[(chat.id, 0)] = game.game_id
     player = game.players.get(user_id)
-    awaiting = context.user_data.get("awaiting_name")
     if player and player.name:
-        if awaiting:
-            context.user_data.pop("awaiting_name", None)
+        context.user_data.pop("awaiting_name", None)
         return
-    if not awaiting:
-        context.user_data["awaiting_name"] = True
     name = message.text.strip()
     logger.debug(
         "handle_name: processing name '%s' for user_id=%s game_id=%s",
@@ -1371,7 +1369,7 @@ def register_handlers(application: Application, include_start: bool = False) -> 
     application.add_handler(CommandHandler(["quit", "exit"], quit_cmd))
     application.add_handler(CommandHandler("chatid", chat_id_handler))
     application.add_handler(
-        MessageHandler(filters.TEXT & (~filters.COMMAND), handle_name, block=False),
+        MessageHandler(filters.TEXT & (~filters.COMMAND), handle_name),
         group=0,
     )
     application.add_handler(CallbackQueryHandler(time_selected, pattern="^(time_|adm_test)"))
