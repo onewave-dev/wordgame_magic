@@ -357,7 +357,7 @@ async def maybe_show_base_options(
 
 async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.message
-    if not message or not context.user_data.get("awaiting_name"):
+    if not message:
         return
     chat = message.chat
     chat_id = chat.id
@@ -375,10 +375,20 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     game.player_chats[user_id] = chat.id
     CHAT_GAMES[(chat.id, 0)] = game.game_id
     player = game.players.get(user_id)
+    awaiting = context.user_data.get("awaiting_name")
     if player and player.name:
-        context.user_data.pop("awaiting_name", None)
+        if awaiting:
+            context.user_data.pop("awaiting_name", None)
         return
+    if not awaiting:
+        context.user_data["awaiting_name"] = True
     name = message.text.strip()
+    logger.debug(
+        "handle_name: processing name '%s' for user_id=%s game_id=%s",
+        name,
+        user_id,
+        game.game_id,
+    )
     if not player:
         if len(game.players) >= 5:
             await reply_game_message(update.message, context, "Лобби заполнено")
@@ -392,6 +402,9 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             game.game_id,
             f"{bold_alnum(player.name)} присоединился к игре",
             parse_mode="HTML",
+        )
+        logger.debug(
+            "handle_name: new player set name '%s' in game %s", name, game.game_id
         )
         host_chat = game.player_chats.get(game.host_id)
         if host_chat:
@@ -407,6 +420,12 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             f"{bold_alnum(player.name)} присоединился к игре",
             parse_mode="HTML",
         )
+        logger.debug(
+            "handle_name: player %s name set to '%s' in game %s",
+            user_id,
+            name,
+            game.game_id,
+        )
         if user_id == game.host_id and game.status == "config":
             buttons = [
                 [
@@ -415,7 +434,9 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 ]
             ]
             if user_id == ADMIN_ID:
-                buttons.append([InlineKeyboardButton("[адм.] Тестовая игра", callback_data="adm_test")])
+                buttons.append(
+                    [InlineKeyboardButton("[адм.] Тестовая игра", callback_data="adm_test")]
+                )
             await reply_game_message(
                 update.message,
                 context,
@@ -1084,6 +1105,17 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     game = g
                     break
     if not game or game.status != "running":
+        target = game
+        if target and user_id in target.players and not target.players[user_id].name:
+            await request_name(user_id, chat_id, context)
+            context.user_data["awaiting_name"] = True
+        elif not target:
+            for g in ACTIVE_GAMES.values():
+                p = g.players.get(user_id)
+                if p and not p.name:
+                    await request_name(user_id, chat_id, context)
+                    context.user_data["awaiting_name"] = True
+                    break
         logger.debug(
             "word_message EXIT: no game or not running; game=%s status=%s chat=%s thread=%s",
             (game.game_id if game else None),
