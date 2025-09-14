@@ -212,11 +212,13 @@ async def broadcast(
     for uid in list(game.players.keys()):
         chat_id = game.player_chats.get(uid)
         if chat_id:
+            if chat_id == skip_chat_id:
+                continue
             try:
                 await context.bot.send_message(
                     chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode
                 )
-                if refresh and chat_id != skip_chat_id:
+                if refresh:
                     schedule_refresh_base_letters(chat_id, 0, context)
             except Exception as exc:  # pragma: no cover - network issues
                 logger.warning("Broadcast to %s failed: %s", chat_id, exc)
@@ -428,6 +430,7 @@ async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
     game = next((g for g in ACTIVE_GAMES.values() if user_id in g.players), None)
     if not game:
         await reply_game_message(update.message, context, "Вы не в игре.")
@@ -446,7 +449,7 @@ async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             except Exception:
                 pass
     game.jobs.clear()
-    await broadcast(game, message, context)
+    await broadcast(game, message, context, skip_chat_id=chat_id)
     await reply_game_message(update.message, context, message)
     for cid in list(game.player_chats.values()):
         CHAT_GAMES.pop(cid, None)
