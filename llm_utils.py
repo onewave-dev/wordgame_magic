@@ -2,11 +2,11 @@
 
 import json
 import logging
-import re
 from typing import Optional, Tuple
 
 from bs4 import BeautifulSoup
 from urllib import parse, request
+from urllib.error import HTTPError, URLError
 
 from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
@@ -18,18 +18,21 @@ logger = logging.getLogger(__name__)
 def lookup_wiktionary(word: str) -> Optional[Tuple[bool, bool, str]]:
     """Return word info from ru.wiktionary.org.
 
-    Performs a HTTP request to the wiktionary page of ``word`` and attempts
-    to parse the first definition in the "Значение" section under the
-    "Существительное" heading. If the page does not exist or cannot be parsed,
-    ``None`` is returned to allow a fallback to the LLM.
+    The function fetches a Wiktionary page and tries to extract the first
+    definition for the word. Several strategies are used to locate the
+    definition list and the branch taken is logged.
     """
 
     url = f"https://ru.wiktionary.org/wiki/{parse.quote(word)}"
+    req = request.Request(url, headers={"User-Agent": "wordgame-bot/1.0"})
     try:
-        with request.urlopen(url) as resp:  # pragma: no cover - network
+        with request.urlopen(req) as resp:  # pragma: no cover - network
             html = resp.read()
-    except Exception:  # pragma: no cover - network errors
-        logger.exception("Wiktionary request failed")
+    except HTTPError as e:  # pragma: no cover - network errors
+        logger.exception("Wiktionary HTTP error: %s", e)
+        return None
+    except URLError as e:  # pragma: no cover - network errors
+        logger.exception("Wiktionary URL error: %s", e.reason)
         return None
 
     soup = BeautifulSoup(html, "html.parser")
@@ -38,17 +41,23 @@ def lookup_wiktionary(word: str) -> Optional[Tuple[bool, bool, str]]:
     if soup.find(class_="noarticletext"):
         return (False, False, "")
 
-    noun_span = soup.find("span", id=re.compile(r"^Существительное"))
-    if not noun_span:
-        logger.info("Noun heading not found for word '%s'", word)
-        return None
+    content = soup.find(id="mw-content-text") or soup
+    branch = "span"
+    ol = None
 
-    definition_span = noun_span.find_next("span", id=re.compile(r"^Значение"))
-    if not definition_span:
-        logger.info("Definition heading not found for word '%s'", word)
-        return None
+    noun_span = content.select_one('span.mw-headline[id^="Существительное"]')
+    if noun_span:
+        ol = noun_span.find_next("ol")
+    else:
+        branch = "no_span"
+        ol = content.find("ol")
+        if not ol:
+            branch = "header_scan"
+            for header in content.select("h3, h4"):
+                ol = header.find_next("ol")
+                if ol:
+                    break
 
-    ol = definition_span.find_next("ol")
     if not ol:
         logger.info("Definition list not found for word '%s'", word)
         return None
@@ -58,6 +67,7 @@ def lookup_wiktionary(word: str) -> Optional[Tuple[bool, bool, str]]:
         logger.info("No definitions found for word '%s'", word)
         return None
 
+    logger.info("lookup_wiktionary branch: %s", branch)
     definition = first_li.get_text(" ", strip=True)
     return (True, True, definition)
 
