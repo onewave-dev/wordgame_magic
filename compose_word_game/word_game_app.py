@@ -224,20 +224,23 @@ async def _tap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def awaiting_name_guard(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Ensure the user provides a name before other commands."""
+    """Ensure the user provides a name before processing commands."""
     if not context.user_data.get("awaiting_name"):
         return
     message = update.effective_message
-    text = message.text if message and message.text else ""
+    if not message:
+        return
+    text = message.text or ""
+    if not text.startswith("/"):
+        return
     cmd = text.split()[0].split("@")[0]
     if cmd in ("/quit", "/exit"):
         return
-    if message:
-        await reply_game_message(
-            message,
-            context,
-            "Сначала назовитесь. Введите ваше имя:",
-        )
+    await reply_game_message(
+        message,
+        context,
+        "Сначала назовитесь. Введите ваше имя:",
+    )
     raise ApplicationHandlerStop
 
 
@@ -1291,7 +1294,9 @@ def register_handlers(application: Application, include_start: bool = False) -> 
     # 0) «Кран-тик» — логируем все апдейты как можно раньше
     application.add_handler(MessageHandler(filters.ALL, _tap, block=False), group=-2)
     # 1) Guard to require name before other commands
-    application.add_handler(MessageHandler(filters.ALL, awaiting_name_guard), group=-1)
+    application.add_handler(
+        MessageHandler(filters.COMMAND, awaiting_name_guard), group=-1
+    )
     if include_start:
         application.add_handler(CommandHandler("start", start_cmd))
     application.add_handler(CommandHandler("newgame", newgame))
