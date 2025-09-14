@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 from typing import Optional, Tuple
 
 from bs4 import BeautifulSoup
@@ -88,8 +89,19 @@ _prompt = PromptTemplate(
     ),
 )
 
-_llm = ChatOpenAI(temperature=0)
-_chain = LLMChain(llm=_llm, prompt=_prompt)
+_chain: Optional[LLMChain] = None
+
+
+def get_chain() -> Optional[LLMChain]:
+    """Return a cached LLMChain if OpenAI credentials are available."""
+    global _chain
+    if _chain is not None:
+        return _chain
+    if not os.environ.get("OPENAI_API_KEY"):
+        return None
+    llm = ChatOpenAI(temperature=0)
+    _chain = LLMChain(llm=llm, prompt=_prompt)
+    return _chain
 
 
 async def describe_word(word: str) -> str:
@@ -113,8 +125,13 @@ async def describe_word(word: str) -> str:
         logger.info("Wiktionary response: %s | category: %s", wiki_data, category)
         return message
 
+    chain = get_chain()
+    if chain is None:
+        logger.info("LLM chain unavailable; skipping LLM lookup")
+        return "Ответ модели не распознан"
+
     try:
-        result = await _chain.apredict(word=word)
+        result = await chain.apredict(word=word)
     except Exception:  # pragma: no cover - network errors
         logger.exception("LLM request failed")
         return "Ответ модели не распознан"
