@@ -274,6 +274,7 @@ WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "/webhook")
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
+    chat_id = update.effective_chat.id
     code = context.args[0] if context.args else None
     if code and code in JOIN_CODES:
         gid = JOIN_CODES[code]
@@ -286,6 +287,9 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     user = update.effective_user
     game = create_dm_game(user.id)
+    if chat_id != user.id:
+        game.player_chats[user.id] = chat_id
+        CHAT_GAMES[(chat_id, 0)] = game.game_id
     text = "Игра создана. Введите ваше имя:"
     if message:
         await reply_game_message(message, context, text)
@@ -363,6 +367,11 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     chat_id = chat.id
     user_id = update.effective_user.id
     game = get_game(chat_id, None)
+    if not game:
+        game = get_game(user_id, None)
+        if game:
+            game.player_chats[user_id] = chat_id
+            CHAT_GAMES[(chat_id, 0)] = game.game_id
     if not game:
         logger.debug(
             "handle_name: game not found for chat_id=%s user_id=%s", chat_id, user_id
