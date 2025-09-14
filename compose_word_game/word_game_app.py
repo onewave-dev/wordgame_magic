@@ -109,6 +109,7 @@ class GameState:
     status: str = "config"  # config | waiting | running | finished
     jobs: Dict[str, any] = field(default_factory=dict)
     invited_users: Set[int] = field(default_factory=set)
+    base_msg_counts: Dict[Tuple[int, int], int] = field(default_factory=dict)
 
 
 ACTIVE_GAMES: Dict[str, GameState] = {}
@@ -162,7 +163,15 @@ async def refresh_base_button(chat_id: int, thread_id: int, context: CallbackCon
     game = get_game(chat_id, thread_id)
     if not game or game.status != "running" or not game.base_word:
         return
-    text = "Собирайте слова из букв базового слова:"
+    key = (chat_id, thread_id)
+    count = game.base_msg_counts.get(key, 0) + 1
+    game.base_msg_counts[key] = count
+    prefix = ""
+    if count >= 5 and (count - 5) % 7 == 0:
+        prefix = (
+            "Можете отправлять знак ? и слово, чтобы проверить определение любого слова у ИИ.\n"
+        )
+    text = prefix + "Собирайте слова из букв базового слова:"
     msg_id = BASE_MSG_IDS.get(game.game_id)
     if msg_id:
         try:
@@ -815,6 +824,11 @@ async def start_game(chat_id: int, thread_id: int, context: CallbackContext) -> 
         return
     game.status = "running"
     await broadcast(game.game_id, f"Исходное слово: {game.base_word.upper()}")
+    await broadcast(
+        game.game_id,
+        "<b>Новая функция</b>: в игре можно отправлять знак ? и слово, чтобы проверить определение любого слова у ИИ.",
+        parse_mode="HTML",
+    )
     schedule_refresh_base_button(chat_id, thread_id, context)
     schedule_jobs(chat_id, thread_id, context, game)
     if 0 in game.players:
