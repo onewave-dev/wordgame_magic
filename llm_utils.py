@@ -1,5 +1,6 @@
 """Utilities for querying LLM about Russian words using LangChain."""
 
+import json
 import logging
 
 from langchain.chains import LLMChain
@@ -13,14 +14,12 @@ _prompt = PromptTemplate(
     input_variables=["word"],
     template=(
         "Ты лингвист. Проанализируй русское слово '{word}'. "
-        "Если такого слова в русском языке не существует, "
-        "ответь: 'Такого слова не существует.' "
-        "Если слово существует, но не является существительным, "
-        "ответь: 'Это слово не является существительным. Определение: <определение>'. "
-        "Если слово существует и является существительным, "
-        "ответь: 'Определение: <определение>'. "
-        "Даже если слово очень редкое, но существует, обработай его по соответствующей ветке. "
-        "Используй одно наиболее распространённое определение."
+        "Ответь строго в формате JSON с полями 'exists', 'is_noun', 'definition'. "
+        "Примеры ответов: {{\"exists\": false, \"is_noun\": false, \"definition\": \"\"}} "
+        "или {{\"exists\": true, \"is_noun\": true, \"definition\": \"краткое определение\"}}. "
+        "Если слово не существует, установи exists=false и оставь definition пустым. "
+        "Если слово существует, но не является существительным, установи exists=true, is_noun=false и дай краткое определение. "
+        "Если слово существует и является существительным, установи exists=true, is_noun=true и дай краткое определение."
     ),
 )
 
@@ -31,16 +30,34 @@ _chain = LLMChain(llm=_llm, prompt=_prompt)
 async def describe_word(word: str) -> str:
     """Return information about a word using the configured LLM chain."""
     logger.info("Querying word: %s", word)
-    result = await _chain.apredict(word=word)
-    lower = result.lower()
-    if "такого слова не существует" in lower:
+    try:
+        result = await _chain.apredict(word=word)
+    except Exception:  # pragma: no cover - network errors
+        logger.exception("LLM request failed")
+        return "Ответ модели не распознан"
+    logger.info("LLM raw response: %s", result)
+
+    try:
+        data = json.loads(result)
+        exists = bool(data["exists"])
+        is_noun = bool(data["is_noun"])
+        definition = data.get("definition", "")
+        if not isinstance(definition, str):
+            raise ValueError("definition must be a string")
+    except Exception:
+        logger.exception("Failed to parse LLM response")
+        return "Ответ модели не распознан"
+
+    if not exists:
         category = "nonexistent"
-    elif "не является существительным" in lower:
+        message = "Такого слова не существует."
+    elif not is_noun:
         category = "not_noun"
-    elif "определение:" in lower:
-        category = "noun"
+        message = f"Это слово не является существительным. Определение: {definition}"
     else:
-        category = "unknown"
-    logger.info("LLM raw response: %s | category: %s", result, category)
-    return result
+        category = "noun"
+        message = f"Определение: {definition}"
+
+    logger.info("LLM parsed response: %s | category: %s", data, category)
+    return message
 
