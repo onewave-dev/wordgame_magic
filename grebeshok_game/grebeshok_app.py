@@ -135,6 +135,14 @@ class GameState:
         return (chat_id, thread_id or 0)
 
 
+def format_player_name(player: Player) -> str:
+    """Return player's name with bot emoji if this is the bot."""
+    name = player.name
+    if player.user_id == 0 or name.lower() in {"bot", "бот"}:
+        name = f"🤖 {name}"
+    return name
+
+
 # Mapping ``(chat_id, thread_id) -> GameState``
 ACTIVE_GAMES: Dict[Tuple[int, int], GameState] = {}
 
@@ -436,7 +444,11 @@ async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await reply_game_message(update.message, context, "Вы не в игре.")
         return
     player = game.players.get(user_id)
-    name = player.name if player and player.name else update.effective_user.first_name
+    name = (
+        format_player_name(player)
+        if player and player.name
+        else update.effective_user.first_name
+    )
     message = (
         f"Игра прервана участником {name}. Вы можете начать заново, нажав /start"
     )
@@ -468,7 +480,10 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     player = game.players[user_id]
     player.name = name
     context.user_data.pop("awaiting_name", None)
-    await reply_game_message(update.message, context, f"Имя установлено: {name}")
+    formatted_name = format_player_name(player)
+    await reply_game_message(
+        update.message, context, f"Имя установлено: {formatted_name}"
+    )
     if game.status == "config" and user_id == game.host_id:
         buttons = [
             [
@@ -487,7 +502,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             reply_markup=InlineKeyboardMarkup(buttons),
         )
     else:
-        await broadcast(game, f"{name} присоединился к игре", context)
+        await broadcast(game, f"{formatted_name} присоединился к игре", context)
         if len(game.players) >= 2:
             if not game.letters_mode:
                 await prompt_letters_selection(game, context)
@@ -769,12 +784,6 @@ async def finish_game(game: GameState, context: CallbackContext, reason: str) ->
         game.players.values(), key=lambda p: p.points, reverse=True
     )
 
-    def format_name(player: Player) -> str:
-        name = player.name
-        if player.user_id == 0 or name.lower() in {"bot", "бот"}:
-            name = f"🤖 {name}"
-        return name
-
     lines = [
         "<b>Игра окончена!</b>",
         "<b>Результаты:</b>",
@@ -783,7 +792,7 @@ async def finish_game(game: GameState, context: CallbackContext, reason: str) ->
         "",
     ]
     for p in players_sorted:
-        lines.append(html.escape(format_name(p)))
+        lines.append(html.escape(format_player_name(p)))
         for i, w in enumerate(p.words, 1):
             lines.append(f"{i}. {html.escape(w)}")
         lines.append(f"<b>Итог:</b> {p.points}")
@@ -796,12 +805,12 @@ async def finish_game(game: GameState, context: CallbackContext, reason: str) ->
     if winners:
         if len(winners) == 1:
             lines.append(
-                f"🏆 <b>Победитель:</b> {html.escape(format_name(winners[0]))}"
+                f"🏆 <b>Победитель:</b> {html.escape(format_player_name(winners[0]))}"
             )
         else:
             lines.append(
                 "🏆 <b>Победители:</b> "
-                + ", ".join(html.escape(format_name(p)) for p in winners)
+                + ", ".join(html.escape(format_player_name(p)) for p in winners)
             )
 
     text = "\n".join(lines).rstrip()
@@ -904,7 +913,7 @@ async def dummy_bot_word(context: CallbackContext) -> None:
     player.words.append(word)
     player.points += 1
     game.used_words.add(word)
-    await broadcast(game, f"Бот: {word}", context)
+    await broadcast(game, f"{format_player_name(player)}: {word}", context)
 
 
 async def question_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -981,12 +990,15 @@ async def handle_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         game.used_words.add(word)
         accepted.append(word)
         await broadcast(
-            game, f"{player.name}: {word}", context, skip_chat_id=chat.id
+            game,
+            f"{format_player_name(player)}: {word}",
+            context,
+            skip_chat_id=chat.id,
         )
         if sum(word.count(b) for b in game.base_letters) >= 6:
             await broadcast(
                 game,
-                f"🔥 {player.name} прислал мощное слово!",
+                f"🔥 {format_player_name(player)} прислал мощное слово!",
                 context,
                 skip_chat_id=chat.id,
             )
