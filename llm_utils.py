@@ -33,16 +33,24 @@ _prompt = PromptTemplate(
 
 model = os.environ.get("OPENAI_LLM_MODEL", "o4-mini")
 
+
+class _DummyChain:
+    async def apredict(self, *args, **kwargs):  # pragma: no cover - stub
+        raise RuntimeError("LLM not available")
+
+
 try:  # pragma: no cover - environment dependent
-    _llm = ChatOpenAI(model=model, temperature=0)
+    _llm = ChatOpenAI(model=model)
     _chain = LLMChain(llm=_llm, prompt=_prompt)
+except TypeError:  # pragma: no cover - unsupported parameters
+    logger.error(
+        "ChatOpenAI initialization failed for model %s due to unsupported parameter configuration",
+        model,
+        exc_info=True,
+    )
+    _chain = _DummyChain()
 except Exception:  # pragma: no cover - initialization failures
     logger.warning("ChatOpenAI initialization failed", exc_info=True)
-
-    class _DummyChain:
-        async def apredict(self, *args, **kwargs):  # pragma: no cover - stub
-            raise RuntimeError("LLM not available")
-
     _chain = _DummyChain()
 
 
