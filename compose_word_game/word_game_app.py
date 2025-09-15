@@ -481,6 +481,10 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         game.time_limit = 1.5
         game.players[0] = Player(user_id=0, name="Бот")
         game.status = "waiting"
+        context.user_data.pop("invite_code", None)
+        for code, gid in list(JOIN_CODES.items()):
+            if gid == game.game_id:
+                JOIN_CODES.pop(code, None)
         await query.edit_message_text("Тестовая игра создана")
         await maybe_show_base_options(chat_id, thread_id, context, game)
         return

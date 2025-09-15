@@ -531,7 +531,13 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         game.time_limit = 1
         game.players[0] = Player(user_id=0, name="Бот")
         game.status = "waiting"
+        context.user_data.pop("invite_code", None)
+        for code, g in list(JOIN_CODES.items()):
+            if g == gid:
+                JOIN_CODES.pop(code, None)
         await query.edit_message_text("Тестовая игра: выберите режим букв")
+        await prompt_letters_selection(game, context)
+        return
     elif query.data.startswith("time_"):
         game.time_limit = int(query.data.split("_")[1])
         await query.edit_message_text("Длительность установлена")
