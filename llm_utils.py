@@ -4,7 +4,6 @@ import json
 import logging
 from typing import Optional, Tuple
 
-from bs4 import BeautifulSoup
 from urllib import parse, request
 from urllib.error import HTTPError, URLError
 
@@ -16,59 +15,51 @@ logger = logging.getLogger(__name__)
 
 
 def lookup_wiktionary(word: str) -> Optional[Tuple[bool, bool, str]]:
-    """Return word info from ru.wiktionary.org.
+    """Return word info from ru.wiktionary.org using the MediaWiki API.
 
-    The function fetches a Wiktionary page and tries to extract the first
-    definition for the word. Several strategies are used to locate the
-    definition list and the branch taken is logged.
+    The function requests the API with ``action=query&prop=extracts`` and
+    attempts to obtain the first line of the ``extract`` field.  The network
+    call is performed with ``urllib`` so it can be easily mocked in tests.
     """
 
-    url = f"https://ru.wiktionary.org/wiki/{parse.quote(word)}"
+    params = {
+        "action": "query",
+        "prop": "extracts",
+        "explaintext": 1,
+        "redirects": 1,
+        "titles": word,
+        "format": "json",
+    }
+    query = parse.urlencode(params)
+    url = f"https://ru.wiktionary.org/w/api.php?{query}"
     req = request.Request(url, headers={"User-Agent": "wordgame-bot/1.0"})
     try:
         with request.urlopen(req) as resp:  # pragma: no cover - network
-            html = resp.read()
+            data = json.loads(resp.read())
     except HTTPError as e:  # pragma: no cover - network errors
         logger.exception("Wiktionary HTTP error: %s", e)
         return None
     except URLError as e:  # pragma: no cover - network errors
         logger.exception("Wiktionary URL error: %s", e.reason)
         return None
+    except json.JSONDecodeError as e:  # pragma: no cover - malformed JSON
+        logger.exception("Wiktionary JSON error: %s", e)
+        return None
 
-    soup = BeautifulSoup(html, "html.parser")
-
-    # Check if the article exists.
-    if soup.find(class_="noarticletext"):
+    pages = data.get("query", {}).get("pages", {})
+    if not pages:
+        logger.info("No pages field in response for word '%s'", word)
+        return None
+    page = next(iter(pages.values()))
+    if "missing" in page:
         return (False, False, "")
 
-    content = soup.find(id="mw-content-text") or soup
-    branch = "span"
-    ol = None
-
-    noun_span = content.select_one('span.mw-headline[id^="Существительное"]')
-    if noun_span:
-        ol = noun_span.find_next("ol")
-    else:
-        branch = "no_span"
-        ol = content.find("ol")
-        if not ol:
-            branch = "header_scan"
-            for header in content.select("h3, h4"):
-                ol = header.find_next("ol")
-                if ol:
-                    break
-
-    if not ol:
-        logger.info("Definition list not found for word '%s'", word)
+    extract = page.get("extract")
+    if not extract:
+        logger.info("No extract found for word '%s'", word)
         return None
 
-    first_li = ol.find("li")
-    if not first_li:
-        logger.info("No definitions found for word '%s'", word)
-        return None
-
-    logger.info("lookup_wiktionary branch: %s", branch)
-    definition = first_li.get_text(" ", strip=True)
+    definition = extract.splitlines()[0].strip()
     return (True, True, definition)
 
 
@@ -88,8 +79,17 @@ _prompt = PromptTemplate(
     ),
 )
 
-_llm = ChatOpenAI(temperature=0)
-_chain = LLMChain(llm=_llm, prompt=_prompt)
+try:  # pragma: no cover - environment dependent
+    _llm = ChatOpenAI(temperature=0)
+    _chain = LLMChain(llm=_llm, prompt=_prompt)
+except Exception:  # pragma: no cover - initialization failures
+    logger.warning("ChatOpenAI initialization failed", exc_info=True)
+
+    class _DummyChain:
+        async def apredict(self, *args, **kwargs):  # pragma: no cover - stub
+            raise RuntimeError("LLM not available")
+
+    _chain = _DummyChain()
 
 
 async def describe_word(word: str) -> str:
