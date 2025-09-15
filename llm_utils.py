@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 from typing import Dict
 
 from langchain.chains import LLMChain
@@ -17,6 +18,9 @@ _prompt = PromptTemplate(
         "Ты лингвист. Проанализируй русское слово '{word}'. "
         "Слово может быть редким или заимствованным. "
         "Считай его существующим, если оно встречается в словарях или в составе известных выражений. "
+        "Если у слова несколько значений, выбери самое распространённое значение существительного. "
+        "Если существует существительное значение, установи is_noun=true. "
+        "Сохрани JSON-поля 'exists', 'is_noun' и 'definition'. "
         "Ответь строго в формате JSON с полями 'exists', 'is_noun', 'definition'. "
         "Примеры ответов: {{\"exists\": false, \"is_noun\": false, \"definition\": \"\"}} "
         "или {{\"exists\": true, \"is_noun\": true, \"definition\": \"краткое определение\"}}. "
@@ -27,8 +31,10 @@ _prompt = PromptTemplate(
     ),
 )
 
+model = os.environ.get("OPENAI_LLM_MODEL", "o4-mini")
+
 try:  # pragma: no cover - environment dependent
-    _llm = ChatOpenAI(temperature=0)
+    _llm = ChatOpenAI(model=model, temperature=0)
     _chain = LLMChain(llm=_llm, prompt=_prompt)
 except Exception:  # pragma: no cover - initialization failures
     logger.warning("ChatOpenAI initialization failed", exc_info=True)
