@@ -947,7 +947,15 @@ async def question_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         else "Этого слова нет в словаре игры"
     )
     llm_text = await describe_word(word)
-    await reply_game_message(message, context, f"{prefix}\n\n{llm_text}")
+    text = f"<b>{word}</b> {prefix}"
+    if llm_text:
+        text = f"{text}\n\n{llm_text}"
+    await reply_game_message(
+        message,
+        context,
+        text,
+        parse_mode="HTML",
+    )
     raise ApplicationHandlerStop
 
 
