@@ -10,7 +10,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from datetime import datetime
-from typing import Any, Dict, Optional, Set, List, Tuple
+from typing import Dict, Optional, Set, List, Tuple
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
@@ -37,6 +37,7 @@ from telegram.ext import (
 )
 from telegram.error import TelegramError
 from llm_utils import describe_word
+from shared.choice_timer import ChoiceTimerHandle, send_choice_with_timer
 
 # --- Utilities --------------------------------------------------------------
 
@@ -668,11 +669,9 @@ async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     player = game.players.get(user_id)
     name = player.name if player and player.name else update.effective_user.first_name
-    for cid, mid in game.jobs.pop("rand_msgs", []):
-        try:
-            await context.bot.delete_message(cid, mid)
-        except Exception:
-            pass
+    choice_handle = game.jobs.pop("base_choice", None)
+    if isinstance(choice_handle, ChoiceTimerHandle):
+        await choice_handle.complete(final_timer_text=None)
     for job in list(game.jobs.values()):
         try:
             job.schedule_removal()
@@ -724,125 +723,51 @@ async def base_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         words = random.sample(candidates, 3)
         buttons = [[InlineKeyboardButton(w, callback_data=f"pick_{w}")] for w in words]
         markup = InlineKeyboardMarkup(buttons)
+        old_handle = game.jobs.pop("base_choice", None)
+        if isinstance(old_handle, ChoiceTimerHandle):
+            await old_handle.complete(final_timer_text=None)
 
-        sent_messages: List[Tuple[int, int]] = []
-        count_jobs: List[Any] = []
+        targets: List[Tuple[int, Optional[int]]] = []
         for cid in set(game.player_chats.values()):
             thread = thread_id if cid == chat_id else None
-            msg = await send_game_message(
-                cid,
-                thread,
-                context,
-                "Выберите слово:",
-                reply_markup=markup,
-            )
-            sent_messages.append((cid, msg.message_id))
-            job = context.job_queue.run_repeating(
-                countdown,
-                interval=1,
-                first=0,
-                chat_id=cid,
-                data={
-                    "thread_id": thread,
-                    "remaining": 5,
-                    "message_id": msg.message_id,
-                    "reply_markup": markup,
-                },
-                name=f"cnt_{cid}_{thread or 0}",
-            )
-            count_jobs.append(job)
+            targets.append((cid, thread))
 
-        game.jobs["rand_msgs"] = sent_messages
-        game.jobs["count"] = count_jobs
-        game.jobs["rand"] = context.job_queue.run_once(
-            finish_random,
-            5,
-            chat_id=chat_id,
-            data={"thread_id": thread_id, "words": words},
-            name=f"rand_{chat_id}_{thread_id}",
+        async def auto_pick(handle: ChoiceTimerHandle) -> None:
+            data = handle.data
+            chat = data.get("chat_id")
+            thread_local = data.get("thread_id")
+            choices = data.get("words", [])
+            if not chat or not choices:
+                return
+            game_state = get_game(chat, (thread_local or 0))
+            if not game_state or game_state.base_word:
+                return
+            stored_handle = game_state.jobs.pop("base_choice", None)
+            if isinstance(stored_handle, ChoiceTimerHandle) and stored_handle is not handle:
+                await stored_handle.complete(final_timer_text=None)
+            word_choice = random.choice(choices)
+            await set_base_word(chat, thread_local, word_choice, handle.context)
+
+        handle = await send_choice_with_timer(
+            context=context,
+            targets=targets,
+            message_text="Выберите слово:",
+            reply_markup=markup,
+            send_func=send_game_message,
+            on_timeout=auto_pick,
+            data={"chat_id": chat_id, "thread_id": thread_id, "words": words},
+            timeout_timer_text="Случайный выбор",
         )
+        game.jobs["base_choice"] = handle
 
     elif query.data.startswith("pick_"):
         if game.base_word:
             return
         word = query.data.split("_", 1)[1]
-        if "rand" in game.jobs:
-            job = game.jobs.pop("rand")
-            job.schedule_removal()
-        for job in game.jobs.pop("count", []):
-            try:
-                job.schedule_removal()
-            except Exception:
-                pass
+        handle = game.jobs.pop("base_choice", None)
+        if isinstance(handle, ChoiceTimerHandle):
+            await handle.complete()
         await set_base_word(chat_id, thread_id, word, context, chosen_by=player.name)
-
-
-async def finish_random(context: CallbackContext) -> None:
-    chat_id = context.job.chat_id
-    data = context.job.data or {}
-    thread_id = data.get("thread_id")
-    game = get_game(chat_id, thread_id or 0)
-    if not game or game.base_word:
-        return
-    for job in game.jobs.pop("count", []):
-        try:
-            job.schedule_removal()
-        except Exception:
-            pass
-    game.jobs.pop("rand", None)
-    word = random.choice(data.get("words", []))
-    await set_base_word(chat_id, thread_id, word, context)
-
-
-async def countdown(context: CallbackContext) -> None:
-    """Send or edit a message with countdown numbers."""
-    chat_id = context.job.chat_id
-    data = context.job.data
-    thread_id = data.get("thread_id")
-    remaining = data.get("remaining", 0)
-    if remaining <= 0:
-        context.job.schedule_removal()
-        return
-
-    msg_id = data.get("message_id")
-    markup = data.get("reply_markup")
-    text = f"⏱️ <b>{remaining}</b>"
-    try:
-        if msg_id:
-            await context.bot.edit_message_text(
-                text,
-                chat_id,
-                msg_id,
-                message_thread_id=thread_id,
-                reply_markup=markup,
-                parse_mode="HTML",
-            )
-            data["message_id"] = msg_id
-        else:
-            msg = await send_game_message(
-                chat_id,
-                thread_id,
-                context,
-                text,
-                reply_markup=markup,
-                parse_mode="HTML",
-            )
-            data["message_id"] = msg.message_id
-    except TelegramError as e:
-        if "message to edit not found" in str(e).lower():
-            msg = await send_game_message(
-                chat_id,
-                thread_id,
-                context,
-                text,
-                reply_markup=markup,
-                parse_mode="HTML",
-            )
-            data["message_id"] = msg.message_id
-        else:
-            raise
-
-    data["remaining"] = remaining - 1
 
 
 def schedule_jobs(chat_id: int, thread_id: int, context: CallbackContext, game: GameState) -> None:
@@ -1000,6 +925,9 @@ async def end_game(context: CallbackContext) -> None:
     await broadcast(
         game.game_id, message, reply_markup=keyboard, parse_mode="HTML"
     )
+    choice_handle = game.jobs.pop("base_choice", None)
+    if isinstance(choice_handle, ChoiceTimerHandle):
+        await choice_handle.complete(final_timer_text=None)
     for job in list(game.jobs.values()):
         try:
             job.schedule_removal()
@@ -1008,7 +936,7 @@ async def end_game(context: CallbackContext) -> None:
     game.jobs.clear()
 
 
-def reset_game(game: GameState) -> None:
+async def reset_game(game: GameState) -> None:
     for p in game.players.values():
         p.words.clear()
         p.points = 0
@@ -1016,6 +944,9 @@ def reset_game(game: GameState) -> None:
     game.base_word = ""
     game.letters.clear()
     game.status = "config"
+    choice_handle = game.jobs.pop("base_choice", None)
+    if isinstance(choice_handle, ChoiceTimerHandle):
+        await choice_handle.complete(final_timer_text=None)
     for job in list(game.jobs.values()):
         try:
             job.schedule_removal()
@@ -1034,7 +965,7 @@ async def restart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not game:
         return
     if query.data == "restart_yes":
-        reset_game(game)
+        await reset_game(game)
         BASE_MSG_IDS.pop(game.game_id, None)
         await query.edit_message_text("Игра перезапущена.")
         buttons = [
