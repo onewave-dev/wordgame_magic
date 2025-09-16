@@ -244,7 +244,7 @@ async def refresh_base_letters_button(
     game = get_game(chat_id, thread_id)
     if (
         not game
-        or game.status not in {"choosing", "running"}
+        or game.status != "running"
         or not game.base_letters
     ):
         return
@@ -616,7 +616,10 @@ async def letters_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     ):
         return
     game.letters_mode = int(query.data.split("_")[1])
-    await query.edit_message_text("Режим выбран")
+    try:
+        await query.delete_message()
+    except Exception:
+        pass
     await send_combo_choices(game, context)
 
 
@@ -647,14 +650,12 @@ async def send_combo_choices(game: GameState, context: CallbackContext) -> None:
         game_state = ACTIVE_GAMES.get(key) if key else None
         if not game_state or game_state.base_letters:
             return
-        stored_handle = game_state.jobs.pop("combo_choice", None)
-        if isinstance(stored_handle, ChoiceTimerHandle) and stored_handle is not handle:
-            await stored_handle.complete(final_timer_text=None)
-        await auto_pick_combo(game_state, handle.context)
+        await auto_pick_combo(game_state, handle.context, handle)
 
     old_handle = game.jobs.pop("combo_choice", None)
     if isinstance(old_handle, ChoiceTimerHandle):
         await old_handle.complete(final_timer_text=None)
+        await cleanup_choice_messages(old_handle)
 
     handle = await send_choice_with_timer(
         context=context,
@@ -664,10 +665,31 @@ async def send_combo_choices(game: GameState, context: CallbackContext) -> None:
         send_func=send_game_message,
         on_timeout=auto_pick,
         data={"game_key": gid},
+        final_timer_text=None,
         timeout_timer_text="Случайный выбор",
     )
     game.status = "choosing"
     game.jobs["combo_choice"] = handle
+
+
+async def cleanup_choice_messages(handle: ChoiceTimerHandle) -> None:
+    """Delete choice and timer messages associated with a handle."""
+
+    bot = handle.context.bot
+    for attr in ("messages", "timer_messages"):
+        entries = getattr(handle, attr, [])
+        for chat_id, thread_id, message_id in list(entries):
+            try:
+                kwargs = {"chat_id": chat_id, "message_id": message_id}
+                if thread_id is not None:
+                    kwargs["message_thread_id"] = thread_id
+                await bot.delete_message(**kwargs)
+            except Exception:
+                continue
+        try:
+            entries.clear()
+        except Exception:
+            pass
 
 
 def game_key_from_state(game: GameState) -> Tuple[int, int]:
@@ -696,16 +718,36 @@ async def send_start_prompt(game: GameState, context: CallbackContext) -> None:
     )
 
 
-async def auto_pick_combo(game: GameState, context: CallbackContext) -> None:
+async def auto_pick_combo(
+    game: GameState,
+    context: CallbackContext,
+    handle: Optional[ChoiceTimerHandle] = None,
+) -> None:
     if game.base_letters:
         return
+
+    job_handle = game.jobs.pop("combo_choice", None)
+    primary_handle: Optional[ChoiceTimerHandle]
+    if isinstance(handle, ChoiceTimerHandle):
+        primary_handle = handle
+    elif isinstance(job_handle, ChoiceTimerHandle):
+        primary_handle = job_handle
+    else:
+        primary_handle = None
+
+    if isinstance(job_handle, ChoiceTimerHandle) and job_handle is not primary_handle:
+        await job_handle.complete(final_timer_text=None)
+        await cleanup_choice_messages(job_handle)
+
+    if isinstance(primary_handle, ChoiceTimerHandle):
+        await primary_handle.complete(final_timer_text=None)
+        await cleanup_choice_messages(primary_handle)
+
     choice = random.choice(game.combo_choices)
     game.base_letters = tuple(ch.lower() for ch in choice)
-    await broadcast(game, f"Случайный выбор: {' • '.join(choice)}", context, refresh=False)
-    for uid in list(game.players.keys()):
-        chat_id = game.player_chats.get(uid)
-        if chat_id:
-            schedule_refresh_base_letters(chat_id, 0, context)
+    await broadcast(
+        game, f"Случайный выбор: {' • '.join(choice)}", context, refresh=False
+    )
     await send_start_prompt(game, context)
 
 
@@ -738,13 +780,10 @@ async def combo_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             context,
             refresh=False,
         )
-    for uid in list(game.players.keys()):
-        chat_id = game.player_chats.get(uid)
-        if chat_id:
-            schedule_refresh_base_letters(chat_id, 0, context)
     handle = game.jobs.pop("combo_choice", None)
     if isinstance(handle, ChoiceTimerHandle):
-        await handle.complete()
+        await handle.complete(final_timer_text=None)
+        await cleanup_choice_messages(handle)
     await send_start_prompt(game, context)
 
 

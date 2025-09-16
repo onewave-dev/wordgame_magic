@@ -72,7 +72,7 @@ async def choose_game(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             REGISTERED_GAMES.add("grebeshok")
         await grebeshok_game.newgame(update, context)
     try:
-        await query.edit_message_reply_markup(None)
+        await query.delete_message()
     except Exception:
         pass
 
