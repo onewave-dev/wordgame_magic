@@ -610,7 +610,9 @@ async def reset_for_chat(chat_id: int, user_id: int, context: CallbackContext) -
 
 
 async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not context.user_data.get("awaiting_grebeshok_name"):
+    awaiting = context.user_data.get("awaiting_grebeshok_name", False)
+    logger.debug("NAME: entered, awaiting=%s", awaiting)
+    if not awaiting:
         return
     user_id = update.effective_user.id
     name = update.message.text.strip()
@@ -648,6 +650,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 await prompt_letters_selection(game, context)
             elif not game.combo_choices:
                 await send_combo_choices(game, context)
+    logger.debug("NAME: set '%s' -> stop pipeline", name)
     raise ApplicationHandlerStop
 
 
@@ -1261,6 +1264,22 @@ def register_handlers(application: Application, include_start: bool = False) -> 
         MessageHandler(filters.TEXT & (~filters.COMMAND), handle_word, block=False),
         group=1,
     )
+
+    def describe_handler(handler: object) -> str:
+        callback = getattr(handler, "callback", None)
+        if hasattr(callback, "__name__"):
+            callback_name = callback.__name__
+        elif hasattr(callback, "__class__"):
+            callback_name = callback.__class__.__name__
+        else:
+            callback_name = repr(callback)
+        return f"{handler.__class__.__name__}:{callback_name}"
+
+    handler_structure = {
+        group: [describe_handler(h) for h in handlers]
+        for group, handlers in sorted(application.handlers.items())
+    }
+    logger.info("Application handlers by group: %s", handler_structure)
 
 
 # FastAPI application -------------------------------------------------------
