@@ -398,6 +398,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             awaiting = storage.get(user_id, {}).get("awaiting_name", False)
         else:
             awaiting = context.application.user_data.get(user_id, {}).get("awaiting_name", False)
+    logger.debug("NAME: entered, awaiting=%s", awaiting)
     if not awaiting:
         return
     if not message:
@@ -436,6 +437,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if len(game.players) >= 5:
             await reply_game_message(message, context, "Лобби заполнено")
             clear_awaiting_name(context, user_id)
+            logger.debug("NAME: set '%s' -> stop pipeline", name)
             raise ApplicationHandlerStop
         player = Player(user_id=user_id, name=name)
         game.players[user_id] = player
@@ -453,6 +455,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if host_chat:
             await maybe_show_base_options(host_chat, None, context, game)
         clear_awaiting_name(context, user_id)
+        logger.debug("NAME: set '%s' -> stop pipeline", name)
         raise ApplicationHandlerStop
     elif not player.name:
         player.name = name
@@ -490,6 +493,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if host_chat:
             await maybe_show_base_options(host_chat, None, context, game)
         clear_awaiting_name(context, user_id)
+        logger.debug("NAME: set '%s' -> stop pipeline", name)
         raise ApplicationHandlerStop
 
 
@@ -1444,6 +1448,22 @@ def register_handlers(application: Application, include_start: bool = False) -> 
         ),
         group=2,
     )
+
+    def describe_handler(handler: object) -> str:
+        callback = getattr(handler, "callback", None)
+        if hasattr(callback, "__name__"):
+            callback_name = callback.__name__
+        elif hasattr(callback, "__class__"):
+            callback_name = callback.__class__.__name__
+        else:
+            callback_name = repr(callback)
+        return f"{handler.__class__.__name__}:{callback_name}"
+
+    handler_structure = {
+        group: [describe_handler(h) for h in handlers]
+        for group, handlers in sorted(application.handlers.items())
+    }
+    logger.info("Application handlers by group: %s", handler_structure)
 
 
 @app.on_event("startup")
