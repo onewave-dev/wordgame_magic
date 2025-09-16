@@ -90,3 +90,74 @@ def test_start_then_handle_name_clears_flag():
             app.CHAT_GAMES.update(old_chat_games)
 
     asyncio.run(run())
+
+
+def test_handle_name_uses_application_storage_when_user_data_empty():
+    async def run():
+        old_active_games = app.ACTIVE_GAMES.copy()
+        old_join_codes = app.JOIN_CODES.copy()
+        old_base_msg_ids = app.BASE_MSG_IDS.copy()
+        old_last_refresh = app.LAST_REFRESH.copy()
+        old_chat_games = app.CHAT_GAMES.copy()
+        try:
+            app.ACTIVE_GAMES.clear()
+            app.JOIN_CODES.clear()
+            app.BASE_MSG_IDS.clear()
+            app.LAST_REFRESH.clear()
+            app.CHAT_GAMES.clear()
+
+            user_id = 202
+            chat_id = 202
+            message = DummyMessage(chat_id, user_id, text="/start")
+            user = SimpleNamespace(id=user_id)
+            update = SimpleNamespace(
+                effective_user=user,
+                effective_chat=message.chat,
+                effective_message=message,
+                message=message,
+            )
+            bot = SimpleNamespace(
+                send_message=AsyncMock(return_value=SimpleNamespace(message_id=2))
+            )
+            application_ns = SimpleNamespace(user_data={})
+            context = SimpleNamespace(
+                args=[],
+                user_data={},
+                application=application_ns,
+                bot=bot,
+            )
+
+            with patch.object(app, "schedule_refresh_base_button", lambda *a, **kw: None):
+                await app.start_cmd(update, context)
+                assert (
+                    context.application.user_data[user_id]["awaiting_name"] is True
+                )
+
+                # Simulate a fresh context where user_data was not preserved
+                context.user_data = {}
+                message.text = "Борис"
+                update.message = message
+                update.effective_message = message
+
+                try:
+                    await app.handle_name(update, context)
+                except ApplicationHandlerStop:
+                    pass
+
+            awaiting_entry = context.application.user_data.get(user_id, {})
+            assert "awaiting_name" not in awaiting_entry
+            assert context.user_data.get("name") == "Борис"
+            assert any("Имя установлено" in reply[0] for reply in message.replies)
+        finally:
+            app.ACTIVE_GAMES.clear()
+            app.ACTIVE_GAMES.update(old_active_games)
+            app.JOIN_CODES.clear()
+            app.JOIN_CODES.update(old_join_codes)
+            app.BASE_MSG_IDS.clear()
+            app.BASE_MSG_IDS.update(old_base_msg_ids)
+            app.LAST_REFRESH.clear()
+            app.LAST_REFRESH.update(old_last_refresh)
+            app.CHAT_GAMES.clear()
+            app.CHAT_GAMES.update(old_chat_games)
+
+    asyncio.run(run())
