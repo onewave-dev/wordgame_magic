@@ -54,6 +54,7 @@ from telegram.ext import (
 )
 
 from llm_utils import describe_word
+from shared.choice_timer import ChoiceTimerHandle, send_choice_with_timer
 
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -481,6 +482,9 @@ async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = (
         f"Игра прервана участником {name}. Вы можете начать заново, нажав /start"
     )
+    handle = game.jobs.pop("combo_choice", None)
+    if isinstance(handle, ChoiceTimerHandle):
+        await handle.complete(final_timer_text=None)
     for job in game.jobs.values():
         try:
             job.schedule_removal()
@@ -538,7 +542,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             if not game.letters_mode:
                 await prompt_letters_selection(game, context)
             elif not game.combo_choices:
-                await maybe_show_combos(game, context)
+                await send_combo_choices(game, context)
     raise ApplicationHandlerStop
 
 
@@ -612,67 +616,57 @@ async def letters_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     game.letters_mode = int(query.data.split("_")[1])
     await query.edit_message_text("Режим выбран")
-    await maybe_show_combos(game, context)
+    await send_combo_choices(game, context)
 
 
-async def maybe_show_combos(game: GameState, context: CallbackContext) -> None:
+async def send_combo_choices(game: GameState, context: CallbackContext) -> None:
     if game.status != "waiting" or len(game.players) < 2 or not game.letters_mode:
         return
-    game.combo_choices = generate_combinations(game.letters_mode, game.viability_threshold)
+    game.combo_choices = generate_combinations(
+        game.letters_mode, game.viability_threshold
+    )
     buttons = [
         [InlineKeyboardButton(" • ".join(combo), callback_data=f"combo_{i}")]
         for i, combo in enumerate(game.combo_choices)
     ]
     markup = InlineKeyboardMarkup(buttons)
-    messages = []
-    for uid, player in game.players.items():
+
+    targets: List[Tuple[int, Optional[int]]] = []
+    for uid in game.players:
         chat_id = game.player_chats.get(uid)
         if chat_id:
-            msg = await send_game_message(
-                chat_id,
-                None,
-                context,
-                "Выберите комбинацию (осталось 5 с):",
-                reply_markup=markup,
-            )
-            messages.append((chat_id, msg.message_id))
+            targets.append((chat_id, None))
+    if not targets:
+        return
+
+    gid = game_key_from_state(game)
+
+    async def auto_pick(handle: ChoiceTimerHandle) -> None:
+        key = handle.data.get("game_key")
+        game_state = ACTIVE_GAMES.get(key) if key else None
+        if not game_state or game_state.base_letters:
+            return
+        stored_handle = game_state.jobs.pop("combo_choice", None)
+        if isinstance(stored_handle, ChoiceTimerHandle) and stored_handle is not handle:
+            await stored_handle.complete(final_timer_text=None)
+        await auto_pick_combo(game_state, handle.context)
+
+    old_handle = game.jobs.pop("combo_choice", None)
+    if isinstance(old_handle, ChoiceTimerHandle):
+        await old_handle.complete(final_timer_text=None)
+
+    handle = await send_choice_with_timer(
+        context=context,
+        targets=targets,
+        message_text="Выберите комбинацию:",
+        reply_markup=markup,
+        send_func=send_game_message,
+        on_timeout=auto_pick,
+        data={"game_key": gid},
+        timeout_timer_text="Случайный выбор",
+    )
     game.status = "choosing"
-    task = asyncio.create_task(combo_countdown(game, context, messages, markup))
-    game.jobs["combo_countdown"] = task
-
-
-async def combo_countdown(
-    game: GameState,
-    context: CallbackContext,
-    messages: List[Tuple[int, int]],
-    markup: InlineKeyboardMarkup,
-) -> None:
-    """Update the combo selection messages with a countdown.
-
-    After five seconds, if no combination was chosen, automatically pick one.
-    """
-
-    remaining = 5
-    try:
-        while remaining > 0:
-            await asyncio.sleep(1)
-            if game.base_letters:
-                break
-            remaining -= 1
-            text = f"Выберите комбинацию (осталось {remaining} с):"
-            for chat_id, message_id in messages:
-                try:
-                    await context.bot.edit_message_text(
-                        text, chat_id=chat_id, message_id=message_id, reply_markup=markup
-                    )
-                except Exception:
-                    pass
-        if not game.base_letters:
-            await auto_pick_combo(game, context)
-    except asyncio.CancelledError:
-        pass
-    finally:
-        game.jobs.pop("combo_countdown", None)
+    game.jobs["combo_choice"] = handle
 
 
 def game_key_from_state(game: GameState) -> Tuple[int, int]:
@@ -747,9 +741,9 @@ async def combo_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         chat_id = game.player_chats.get(uid)
         if chat_id:
             schedule_refresh_base_letters(chat_id, 0, context)
-    task = game.jobs.pop("combo_countdown", None)
-    if task:
-        task.cancel()
+    handle = game.jobs.pop("combo_choice", None)
+    if isinstance(handle, ChoiceTimerHandle):
+        await handle.complete()
     await send_start_prompt(game, context)
 
 
@@ -811,6 +805,9 @@ async def end_game_job(context: CallbackContext) -> None:
 
 async def finish_game(game: GameState, context: CallbackContext, reason: str) -> None:
     gid = game_key_from_state(game)
+    handle = game.jobs.pop("combo_choice", None)
+    if isinstance(handle, ChoiceTimerHandle):
+        await handle.complete(final_timer_text=None)
     for job in game.jobs.values():
         try:
             job.schedule_removal()
