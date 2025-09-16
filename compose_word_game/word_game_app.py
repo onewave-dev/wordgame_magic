@@ -381,22 +381,10 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     user_id = user.id
     message = update.message or update.effective_message
-    chat = message.chat if message else update.effective_chat
-    chat_id = chat.id if chat else None
-    thread_id = getattr(message, "message_thread_id", None) if message else None
     awaiting = False
     if context.application:
         awaiting = context.application.user_data.get(user_id, {}).get("awaiting_name", False)
     if not awaiting:
-        logger.warning(
-            "handle_name: received name without awaiting flag for user_id=%s", user_id
-        )
-        prompt_text = "Пожалуйста, начните игру командой /start"
-        if message:
-            await reply_game_message(message, context, prompt_text)
-        elif chat_id is not None:
-            await send_game_message(chat_id, thread_id, context, prompt_text)
-        clear_awaiting_name(context, user_id)
         return
     if not message:
         return
@@ -1154,13 +1142,11 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         target = game
         if target and user_id in target.players and not target.players[user_id].name:
             await request_name(user_id, chat_id, context)
-            mark_awaiting_name(context, user_id)
         elif not target:
             for g in ACTIVE_GAMES.values():
                 p = g.players.get(user_id)
                 if p and not p.name:
                     await request_name(user_id, chat_id, context)
-                    mark_awaiting_name(context, user_id)
                     break
         logger.debug(
             "word_message EXIT: no game or not running; game=%s status=%s chat=%s thread=%s",
