@@ -708,6 +708,69 @@ async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ACTIVE_GAMES.pop(game.game_id, None)
 
 
+async def reset_for_chat(chat_id: int, user_id: int, context: CallbackContext) -> None:
+    """Reset and remove any game associated with the provided chat/user."""
+
+    game_ids: Set[str] = set()
+
+    for key, gid in list(CHAT_GAMES.items()):
+        if key[0] == chat_id or key[0] == user_id:
+            game_ids.add(gid)
+
+    for gid, game in list(ACTIVE_GAMES.items()):
+        if gid in game_ids:
+            continue
+        if chat_id in game.player_chats.values() or user_id in game.players:
+            game_ids.add(gid)
+
+    if not game_ids:
+        return
+
+    for gid in game_ids:
+        game = ACTIVE_GAMES.get(gid)
+        if not game:
+            continue
+
+        choice_handle = game.jobs.pop("base_choice", None)
+        if isinstance(choice_handle, ChoiceTimerHandle):
+            await choice_handle.complete(final_timer_text=None)
+
+        for job in list(game.jobs.values()):
+            if isinstance(job, ChoiceTimerHandle):
+                await job.complete(final_timer_text=None)
+            else:
+                try:
+                    job.schedule_removal()
+                except Exception:
+                    try:
+                        job.cancel()
+                    except Exception:
+                        pass
+        game.jobs.clear()
+
+        for pid in list(game.players.keys()):
+            clear_awaiting_name(context, pid)
+
+        BASE_MSG_IDS.pop(gid, None)
+
+        related_keys = set(game.base_msg_counts.keys())
+        related_chats = set(game.player_chats.values())
+        related_chats.add(chat_id)
+
+        for key in related_keys:
+            LAST_REFRESH.pop(key, None)
+
+        for cid in related_chats:
+            CHAT_GAMES.pop((cid, 0), None)
+            LAST_REFRESH.pop((cid, 0), None)
+
+        for code, stored_gid in list(JOIN_CODES.items()):
+            if stored_gid == gid:
+                JOIN_CODES.pop(code, None)
+
+        ACTIVE_GAMES.pop(gid, None)
+
+
 async def base_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()

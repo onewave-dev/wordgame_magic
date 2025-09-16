@@ -506,6 +506,109 @@ async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ACTIVE_GAMES.pop(gid, None)
 
 
+async def reset_for_chat(chat_id: int, user_id: int, context: CallbackContext) -> None:
+    """Stop jobs and remove any Grebeshok game bound to the chat or user."""
+
+    active_keys: Set[Tuple[int, int]] = set()
+
+    for key, game in list(ACTIVE_GAMES.items()):
+        if key[0] == chat_id or chat_id in game.player_chats.values() or user_id in game.players:
+            active_keys.add(key)
+
+    for candidate in (chat_id, user_id):
+        game = CHAT_GAMES.get(candidate)
+        if not game:
+            continue
+        try:
+            key = game_key_from_state(game)
+        except KeyError:
+            continue
+        active_keys.add(key)
+
+    finished_keys: Set[Tuple[int, int]] = set()
+    for key, game in list(FINISHED_GAMES.items()):
+        if key[0] == chat_id or chat_id in game.player_chats.values() or user_id in game.players:
+            finished_keys.add(key)
+
+    for key in list(active_keys):
+        game = ACTIVE_GAMES.get(key)
+        if not game:
+            continue
+
+        handle = game.jobs.pop("combo_choice", None)
+        if isinstance(handle, ChoiceTimerHandle):
+            await handle.complete(final_timer_text=None)
+            await cleanup_choice_messages(handle)
+
+        for job in list(game.jobs.values()):
+            if isinstance(job, ChoiceTimerHandle):
+                await job.complete(final_timer_text=None)
+                await cleanup_choice_messages(job)
+            else:
+                try:
+                    job.schedule_removal()
+                except Exception:
+                    try:
+                        job.cancel()
+                    except Exception:
+                        pass
+        game.jobs.clear()
+
+        for pid in list(game.players.keys()):
+            clear_awaiting_grebeshok_name(context, pid)
+
+        related_chats = set(game.player_chats.values())
+        related_keys = set(game.base_msg_counts.keys())
+        related_keys.add(key)
+
+        for base_key in list(related_keys):
+            BASE_MSG_IDS.pop(base_key, None)
+            LAST_REFRESH.pop(base_key, None)
+            REFRESH_LOCKS.pop(base_key, None)
+
+        for cid in related_chats:
+            CHAT_GAMES.pop(cid, None)
+            base_key = (cid, 0)
+            BASE_MSG_IDS.pop(base_key, None)
+            LAST_REFRESH.pop(base_key, None)
+            REFRESH_LOCKS.pop(base_key, None)
+
+        for code, stored_key in list(JOIN_CODES.items()):
+            if stored_key == key:
+                JOIN_CODES.pop(code, None)
+
+        ACTIVE_GAMES.pop(key, None)
+        FINISHED_GAMES.pop(key, None)
+
+    for key in list(finished_keys):
+        game = FINISHED_GAMES.pop(key, None)
+        if not game:
+            continue
+
+        for pid in list(game.players.keys()):
+            clear_awaiting_grebeshok_name(context, pid)
+
+        related_chats = set(game.player_chats.values())
+        related_keys = set(game.base_msg_counts.keys())
+        related_keys.add(key)
+
+        for base_key in list(related_keys):
+            BASE_MSG_IDS.pop(base_key, None)
+            LAST_REFRESH.pop(base_key, None)
+            REFRESH_LOCKS.pop(base_key, None)
+
+        for cid in related_chats:
+            CHAT_GAMES.pop(cid, None)
+            base_key = (cid, 0)
+            BASE_MSG_IDS.pop(base_key, None)
+            LAST_REFRESH.pop(base_key, None)
+            REFRESH_LOCKS.pop(base_key, None)
+
+        for code, stored_key in list(JOIN_CODES.items()):
+            if stored_key == key:
+                JOIN_CODES.pop(code, None)
+
+
 async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.user_data.get("awaiting_grebeshok_name"):
         return

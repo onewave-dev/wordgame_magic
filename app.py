@@ -61,6 +61,12 @@ async def choose_game(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     query = update.callback_query
     await query.answer()
     game = query.data
+    chat = query.message.chat if query.message else None
+    chat_id = chat.id if chat else (query.from_user.id if query.from_user else None)
+    user_id = query.from_user.id if query.from_user else None
+    if chat_id is not None and user_id is not None:
+        await compose_game.reset_for_chat(chat_id, user_id, context)
+        await grebeshok_game.reset_for_chat(chat_id, user_id, context)
     if game == "game_compose":
         if "compose" not in REGISTERED_GAMES:
             compose_game.register_handlers(APPLICATION)
