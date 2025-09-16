@@ -159,6 +159,7 @@ FINISHED_GAMES: Dict[Tuple[int, int], GameState] = {}
 # Message IDs for base letters buttons and throttling timestamps
 BASE_MSG_IDS: Dict[Tuple[int, int], int] = {}
 LAST_REFRESH: Dict[Tuple[int, int], float] = {}
+REFRESH_LOCKS: Dict[Tuple[int, int], asyncio.Lock] = {}
 
 
 def game_key(chat_id: int, thread_id: Optional[int]) -> Tuple[int, int]:
@@ -246,30 +247,32 @@ async def refresh_base_letters_button(
     ):
         return
     key = (chat_id, thread_id)
-    msg_id = BASE_MSG_IDS.get(key)
-    if msg_id:
-        try:
-            await context.bot.delete_message(chat_id, msg_id)
-        except Exception:
-            pass
-    letters = " • ".join(ch.upper() for ch in game.base_letters)
-    count = game.base_msg_counts.get(key, 0) + 1
-    game.base_msg_counts[key] = count
-    prefix = ""
-    if count >= 5 and (count - 5) % 7 == 0:
-        prefix = (
-            "Можете отправлять знак ? и слово, чтобы проверить определение любого слова у ИИ.\n"
+    lock = REFRESH_LOCKS.setdefault(key, asyncio.Lock())
+    async with lock:
+        msg_id = BASE_MSG_IDS.get(key)
+        if msg_id:
+            try:
+                await context.bot.delete_message(chat_id, msg_id)
+            except Exception:
+                pass
+        letters = " • ".join(ch.upper() for ch in game.base_letters)
+        count = game.base_msg_counts.get(key, 0) + 1
+        game.base_msg_counts[key] = count
+        prefix = ""
+        if count >= 5 and (count - 5) % 7 == 0:
+            prefix = (
+                "Можете отправлять знак ? и слово, чтобы проверить определение любого слова у ИИ.\n"
+            )
+        msg = await context.bot.send_message(
+            chat_id,
+            prefix + "Используйте буквы:",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton(letters, callback_data="noop")]]
+            ),
+            message_thread_id=thread_id or None,
         )
-    msg = await context.bot.send_message(
-        chat_id,
-        prefix + "Используйте буквы:",
-        reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton(letters, callback_data="noop")]]
-        ),
-        message_thread_id=thread_id or None,
-    )
-    BASE_MSG_IDS[key] = msg.message_id
-    LAST_REFRESH[key] = asyncio.get_event_loop().time()
+        BASE_MSG_IDS[key] = msg.message_id
+        LAST_REFRESH[key] = asyncio.get_event_loop().time()
 
 
 def schedule_refresh_base_letters(
@@ -291,6 +294,7 @@ async def send_game_message(
     thread_id: Optional[int],
     context: CallbackContext,
     text: str,
+    refresh: bool = True,
     **kwargs,
 ):
     """Wrapper for ``send_message`` that schedules base letters refresh."""
@@ -301,15 +305,19 @@ async def send_game_message(
         msg = await context.bot.send_message(
             chat_id, text, message_thread_id=thread_id, **kwargs
         )
-    schedule_refresh_base_letters(chat_id, thread_id or 0, context)
+    if refresh:
+        schedule_refresh_base_letters(chat_id, thread_id or 0, context)
     return msg
 
 
-async def reply_game_message(message, context: CallbackContext, text: str, **kwargs):
+async def reply_game_message(
+    message, context: CallbackContext, text: str, refresh: bool = True, **kwargs
+):
     msg = await message.reply_text(text, **kwargs)
-    schedule_refresh_base_letters(
-        message.chat_id, message.message_thread_id or 0, context
-    )
+    if refresh:
+        schedule_refresh_base_letters(
+            message.chat_id, message.message_thread_id or 0, context
+        )
     return msg
 
 
@@ -702,7 +710,7 @@ async def auto_pick_combo(game: GameState, context: CallbackContext) -> None:
     for uid in list(game.players.keys()):
         chat_id = game.player_chats.get(uid)
         if chat_id:
-            await refresh_base_letters_button(chat_id, 0, context)
+            schedule_refresh_base_letters(chat_id, 0, context)
     await send_start_prompt(game, context)
 
 
@@ -738,7 +746,7 @@ async def combo_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     for uid in list(game.players.keys()):
         chat_id = game.player_chats.get(uid)
         if chat_id:
-            await refresh_base_letters_button(chat_id, 0, context)
+            schedule_refresh_base_letters(chat_id, 0, context)
     task = game.jobs.pop("combo_countdown", None)
     if task:
         task.cancel()
@@ -784,7 +792,7 @@ async def start_round(game: GameState, context: CallbackContext) -> None:
         chat_id = game.player_chats.get(uid)
         if chat_id:
             await context.bot.unpin_all_chat_messages(chat_id)
-            await refresh_base_letters_button(chat_id, 0, context)
+            schedule_refresh_base_letters(chat_id, 0, context)
 
 
 async def one_minute_warning(context: CallbackContext) -> None:
@@ -1042,17 +1050,23 @@ async def handle_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
 
     if accepted:
-        await reply_game_message(update.message, context, "✅")
+        await reply_game_message(update.message, context, "✅", refresh=False)
         await reply_game_message(
-            update.message, context, "Зачтены: " + ", ".join(accepted)
+            update.message,
+            context,
+            "Зачтены: " + ", ".join(accepted),
+            refresh=False,
         )
     if rejected:
-        await reply_game_message(update.message, context, "❌")
+        await reply_game_message(update.message, context, "❌", refresh=False)
         await reply_game_message(
-            update.message, context, "Отклонены: " + ", ".join(rejected)
+            update.message,
+            context,
+            "Отклонены: " + ", ".join(rejected),
+            refresh=False,
         )
 
-    await refresh_base_letters_button(
+    schedule_refresh_base_letters(
         chat.id, update.message.message_thread_id or 0, context
     )
 
