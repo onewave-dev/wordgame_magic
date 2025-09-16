@@ -392,6 +392,7 @@ async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     host_id = update.effective_user.id
     game = GameState(host_id=host_id)
+    CHAT_GAMES[chat.id] = game
     game.players[host_id] = Player(user_id=host_id)
     game.player_chats[host_id] = chat.id
     ACTIVE_GAMES[gid] = game
