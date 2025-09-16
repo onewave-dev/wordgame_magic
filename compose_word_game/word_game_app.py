@@ -272,6 +272,22 @@ WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", secrets.token_hex())
 WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "/webhook")
 
 
+def mark_awaiting_name(context: CallbackContext, user_id: int) -> None:
+    context.user_data["awaiting_name"] = True
+    if context.application:
+        context.application.user_data.setdefault(user_id, {})["awaiting_name"] = True
+
+
+def clear_awaiting_name(context: CallbackContext, user_id: int) -> None:
+    context.user_data.pop("awaiting_name", None)
+    if context.application:
+        user_store = context.application.user_data.get(user_id)
+        if user_store is not None:
+            user_store.pop("awaiting_name", None)
+            if not user_store:
+                context.application.user_data.pop(user_id, None)
+
+
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     chat_id = update.effective_chat.id
@@ -295,7 +311,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await reply_game_message(message, context, text)
     else:
         await send_game_message(update.effective_chat.id, None, context, text)
-    context.user_data["awaiting_name"] = True
+    mark_awaiting_name(context, user.id)
 
 
 async def request_name(user_id: int, chat_id: int, context: CallbackContext) -> None:
@@ -305,7 +321,7 @@ async def request_name(user_id: int, chat_id: int, context: CallbackContext) -> 
         context,
         "Введите ваше имя",
     )
-    context.user_data["awaiting_name"] = True
+    mark_awaiting_name(context, user_id)
 
 
 def create_dm_game(host_id: int) -> GameState:
@@ -328,7 +344,7 @@ async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await reply_game_message(update.message, context, text)
     else:
         await send_game_message(chat_id, None, context, text)
-    context.user_data["awaiting_name"] = True
+    mark_awaiting_name(context, user.id)
 
 
 async def maybe_show_base_options(
@@ -360,14 +376,32 @@ async def maybe_show_base_options(
 
 
 async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not context.user_data.get("awaiting_name"):
+    user = update.effective_user
+    if not user:
         return
-    message = update.message
+    user_id = user.id
+    message = update.message or update.effective_message
+    chat = message.chat if message else update.effective_chat
+    chat_id = chat.id if chat else None
+    thread_id = getattr(message, "message_thread_id", None) if message else None
+    awaiting = False
+    if context.application:
+        awaiting = context.application.user_data.get(user_id, {}).get("awaiting_name", False)
+    if not awaiting:
+        logger.warning(
+            "handle_name: received name without awaiting flag for user_id=%s", user_id
+        )
+        prompt_text = "Пожалуйста, начните игру командой /start"
+        if message:
+            await reply_game_message(message, context, prompt_text)
+        elif chat_id is not None:
+            await send_game_message(chat_id, thread_id, context, prompt_text)
+        clear_awaiting_name(context, user_id)
+        return
     if not message:
         return
     chat = message.chat
     chat_id = chat.id
-    user_id = update.effective_user.id
     game = get_game(chat_id, None)
     if not game:
         game = get_game(user_id, None)
@@ -378,7 +412,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         logger.debug(
             "handle_name: game not found for chat_id=%s user_id=%s", chat_id, user_id
         )
-        context.user_data.pop("awaiting_name", None)
+        clear_awaiting_name(context, user_id)
         await reply_game_message(
             message, context, "Игра не найдена, начните заново командой /start"
         )
@@ -387,7 +421,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     CHAT_GAMES[(chat.id, 0)] = game.game_id
     player = game.players.get(user_id)
     if player and player.name:
-        context.user_data.pop("awaiting_name", None)
+        clear_awaiting_name(context, user_id)
         return
     name = message.text.strip()
     logger.debug(
@@ -398,13 +432,13 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     )
     if not player:
         if len(game.players) >= 5:
-            await reply_game_message(update.message, context, "Лобби заполнено")
-            context.user_data.pop("awaiting_name", None)
+            await reply_game_message(message, context, "Лобби заполнено")
+            clear_awaiting_name(context, user_id)
             raise ApplicationHandlerStop
         player = Player(user_id=user_id, name=name)
         game.players[user_id] = player
         context.user_data["name"] = name
-        await reply_game_message(update.message, context, f"Имя установлено: {player.name}")
+        await reply_game_message(message, context, f"Имя установлено: {player.name}")
         await broadcast(
             game.game_id,
             f"{bold_alnum(player.name)} присоединился к игре",
@@ -416,12 +450,12 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         host_chat = game.player_chats.get(game.host_id)
         if host_chat:
             await maybe_show_base_options(host_chat, None, context, game)
-        context.user_data.pop("awaiting_name", None)
+        clear_awaiting_name(context, user_id)
         raise ApplicationHandlerStop
     elif not player.name:
         player.name = name
         context.user_data["name"] = name
-        await reply_game_message(update.message, context, f"Имя установлено: {player.name}")
+        await reply_game_message(message, context, f"Имя установлено: {player.name}")
         await broadcast(
             game.game_id,
             f"{bold_alnum(player.name)} присоединился к игре",
@@ -445,7 +479,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                     [InlineKeyboardButton("[адм.] Тестовая игра", callback_data="adm_test")]
                 )
             await reply_game_message(
-                update.message,
+                message,
                 context,
                 "Выберите длительность игры:",
                 reply_markup=InlineKeyboardMarkup(buttons),
@@ -453,7 +487,7 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         host_chat = game.player_chats.get(game.host_id)
         if host_chat:
             await maybe_show_base_options(host_chat, None, context, game)
-        context.user_data.pop("awaiting_name", None)
+        clear_awaiting_name(context, user_id)
         raise ApplicationHandlerStop
 
 
@@ -552,7 +586,7 @@ async def add_player_via_invite(
         user_id,
         "Введите ваше имя",
     )
-    context.user_data["awaiting_name"] = True
+    mark_awaiting_name(context, user_id)
 
 
 async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1120,13 +1154,13 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         target = game
         if target and user_id in target.players and not target.players[user_id].name:
             await request_name(user_id, chat_id, context)
-            context.user_data["awaiting_name"] = True
+            mark_awaiting_name(context, user_id)
         elif not target:
             for g in ACTIVE_GAMES.values():
                 p = g.players.get(user_id)
                 if p and not p.name:
                     await request_name(user_id, chat_id, context)
-                    context.user_data["awaiting_name"] = True
+                    mark_awaiting_name(context, user_id)
                     break
         logger.debug(
             "word_message EXIT: no game or not running; game=%s status=%s chat=%s thread=%s",
