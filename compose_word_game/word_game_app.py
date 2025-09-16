@@ -276,7 +276,11 @@ WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "/webhook")
 def mark_awaiting_name(context: CallbackContext, user_id: int) -> None:
     context.user_data["awaiting_name"] = True
     if context.application:
-        user_store = context.application.user_data.setdefault(user_id, {})
+        storage = getattr(context.application, "_user_data", None)
+        if storage is not None:
+            user_store = storage.setdefault(user_id, {})
+        else:
+            user_store = context.application.user_data.setdefault(user_id, {})
         user_store["awaiting_name"] = True
 
 
