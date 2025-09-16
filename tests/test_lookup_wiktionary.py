@@ -68,3 +68,22 @@ def test_lookup_wiktionary_first_line():
         == "кровельный материал из картона, пропитанного дегтем или битумом"
     )
 
+
+def test_lookup_wiktionary_meaning_trim():
+    html = """
+    <html>
+      <body>
+        <h2><span id=\"Значение\">Значение</span></h2>
+        <p>Первое значение ◆ дополнительная помета</p>
+      </body>
+    </html>
+    """.encode("utf-8")
+
+    def fake_urlopen(url):
+        return DummyResponse(html)
+
+    with patch("wiktionary_utils.request.urlopen", fake_urlopen):
+        result = wiktionary_utils.lookup_wiktionary_meaning("пример")
+
+    assert result == "Первое значение"
+

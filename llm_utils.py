@@ -3,11 +3,13 @@
 import json
 import logging
 import os
-from typing import Dict
+from typing import Dict, Optional
 
 from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
+
+from wiktionary_utils import lookup_wiktionary_meaning
 
 logger = logging.getLogger(__name__)
 
@@ -84,9 +86,18 @@ async def describe_word(word: str) -> str:
         logger.exception("Failed to parse LLM response")
         return "Сервис определения слов временно недоступен."
 
+    meaning: Optional[str] = None
     if not exists:
         category = "nonexistent"
-        message = "Такого слова не существует."
+        try:
+            meaning = lookup_wiktionary_meaning(word)
+        except Exception:  # pragma: no cover - safety net around HTML parsing
+            logger.exception("Failed to fetch Wiktionary meaning for %s", word)
+        if meaning:
+            category = "wiktionary"
+            message = f"Определение: {meaning}"
+        else:
+            message = "Такого слова не существует."
     elif not is_noun:
         category = "not_noun"
         message = f"Это слово не является существительным. Определение: {definition}"
