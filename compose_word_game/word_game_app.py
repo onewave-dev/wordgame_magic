@@ -1327,7 +1327,7 @@ def register_handlers(application: Application, include_start: bool = False) -> 
     application.add_handler(CommandHandler(["quit", "exit"], quit_cmd))
     application.add_handler(CommandHandler("chatid", chat_id_handler))
     application.add_handler(
-        MessageHandler(filters.TEXT & (~filters.COMMAND), handle_name),
+        MessageHandler(filters.TEXT & (~filters.COMMAND), handle_name, block=False),
         group=0,
     )
     application.add_handler(CallbackQueryHandler(time_selected, pattern="^(time_|adm_test)"))
