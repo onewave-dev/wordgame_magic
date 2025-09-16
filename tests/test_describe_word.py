@@ -37,3 +37,25 @@ def test_describe_word_cache():
         message2 = asyncio.run(llm_utils.describe_word("инь"))
     assert message1 == message2 == "Определение: женское начало"
     mock_llm.assert_called_once()
+
+
+def test_describe_word_wiktionary_definition():
+    result = json.dumps({"exists": False, "is_noun": False, "definition": ""})
+    with patch.object(llm_utils._chain, "apredict", AsyncMock(return_value=result)) as mock_llm:
+        with patch("llm_utils.lookup_wiktionary_meaning", return_value="краткое толкование") as mock_lookup:
+            llm_utils._cache.clear()
+            message = asyncio.run(llm_utils.describe_word("фуп"))
+    mock_llm.assert_called_once()
+    mock_lookup.assert_called_once_with("фуп")
+    assert message == "Определение: краткое толкование"
+
+
+def test_describe_word_wiktionary_missing():
+    result = json.dumps({"exists": False, "is_noun": False, "definition": ""})
+    with patch.object(llm_utils._chain, "apredict", AsyncMock(return_value=result)) as mock_llm:
+        with patch("llm_utils.lookup_wiktionary_meaning", return_value=None) as mock_lookup:
+            llm_utils._cache.clear()
+            message = asyncio.run(llm_utils.describe_word("фуп"))
+    mock_llm.assert_called_once()
+    mock_lookup.assert_called_once_with("фуп")
+    assert message == "Такого слова не существует."
