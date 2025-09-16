@@ -1130,8 +1130,8 @@ def register_handlers(application: Application, include_start: bool = False) -> 
     application.add_handler(CommandHandler("join", join_cmd))
     application.add_handler(CommandHandler("exit", quit_cmd))
     application.add_handler(
-        MessageHandler(filters.TEXT & (~filters.COMMAND), handle_name, block=False),
-        group=0,
+        MessageHandler(filters.TEXT & (~filters.COMMAND), handle_name, block=True),
+        group=-1,
     )
     application.add_handler(
         MessageHandler(filters.Regex("^Создать ссылку$"), invite_link),
@@ -1144,6 +1144,7 @@ def register_handlers(application: Application, include_start: bool = False) -> 
         MessageHandler(
             filters.ChatType.PRIVATE & filters.Regex(r'^\?'),
             question_word,
+            block=False,
         ),
         group=1,
     )
@@ -1153,7 +1154,7 @@ def register_handlers(application: Application, include_start: bool = False) -> 
     application.add_handler(CallbackQueryHandler(start_round_cb, pattern="^start_round$"))
     application.add_handler(CallbackQueryHandler(restart_game, pattern="^restart_"))
     application.add_handler(
-        MessageHandler(filters.TEXT & (~filters.COMMAND), handle_word),
+        MessageHandler(filters.TEXT & (~filters.COMMAND), handle_word, block=False),
         group=1,
     )
 
