@@ -336,6 +336,19 @@ async def awaiting_grebeshok_name_guard(
     raise ApplicationHandlerStop
 
 
+def clear_awaiting_grebeshok_name(
+    context: CallbackContext, user_id: int
+) -> None:
+    """Remove awaiting name flags for a player from context storages."""
+    context.user_data.pop("awaiting_grebeshok_name", None)
+    if context.application:
+        user_store = context.application.user_data.get(user_id)
+        if user_store is not None:
+            user_store.pop("awaiting_grebешok_name", None)
+            if not user_store:
+                context.application.user_data.pop(user_id, None)
+
+
 # ---------------------------------------------------------------------------
 # Command and callback handlers
 # ---------------------------------------------------------------------------
@@ -469,6 +482,8 @@ async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             except Exception:
                 pass
     game.jobs.clear()
+    for member_id in list(game.players.keys()):
+        clear_awaiting_grebeshok_name(context, member_id)
     await broadcast(game, message, context, skip_chat_id=chat_id)
     await reply_game_message(update.message, context, message)
     for cid in list(game.player_chats.values()):
