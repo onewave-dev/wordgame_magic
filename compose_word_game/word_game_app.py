@@ -22,6 +22,7 @@ from telegram import (
     KeyboardButton,
     ReplyKeyboardMarkup,
     KeyboardButtonRequestUsers,
+    Message,
     User,
 )
 from telegram import Update
@@ -119,6 +120,21 @@ BASE_MSG_IDS: Dict[str, int] = {}
 LAST_REFRESH: Dict[Tuple[int, int], float] = {}
 # Map player chat (chat_id, thread_id) to game_id for quick lookup
 CHAT_GAMES: Dict[Tuple[int, int], str] = {}
+# Track users from whom the game currently expects a name
+AWAITING_NAME_USERS: Set[int] = set()
+
+
+class AwaitingComposeNameFilter(filters.MessageFilter):
+    """Filter that matches only messages from users awaiting a name."""
+
+    name = "compose_awaiting_name"
+
+    def filter(self, message: Message) -> bool:
+        user = getattr(message, "from_user", None)
+        return bool(user and user.id in AWAITING_NAME_USERS)
+
+
+AWAITING_COMPOSE_NAME_FILTER = AwaitingComposeNameFilter()
 
 
 def get_game(chat_id: int, thread_id: Optional[int]) -> Optional[GameState]:
@@ -241,7 +257,12 @@ async def awaiting_name_guard(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Ensure the user provides a name before processing commands."""
-    if not context.user_data.get("awaiting_name"):
+    user = update.effective_user
+    user_id = user.id if user else None
+    awaiting = bool(user_id and user_id in AWAITING_NAME_USERS)
+    if not awaiting:
+        awaiting = context.user_data.get("awaiting_name", False)
+    if not awaiting:
         return
     message = update.effective_message
     if not message:
@@ -274,6 +295,7 @@ WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "/webhook")
 
 
 def mark_awaiting_name(context: CallbackContext, user_id: int) -> None:
+    AWAITING_NAME_USERS.add(user_id)
     context.user_data["awaiting_name"] = True
     if context.application:
         storage = getattr(context.application, "_user_data", None)
@@ -285,6 +307,7 @@ def mark_awaiting_name(context: CallbackContext, user_id: int) -> None:
 
 
 def clear_awaiting_name(context: CallbackContext, user_id: int) -> None:
+    AWAITING_NAME_USERS.discard(user_id)
     context.user_data.pop("awaiting_name", None)
     if context.application:
         user_store = context.application.user_data.get(user_id)
@@ -391,13 +414,17 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     user_id = user.id
     message = update.message or update.effective_message
-    awaiting = context.user_data.get("awaiting_name", False)
-    if not awaiting and context.application:
-        storage = getattr(context.application, "_user_data", None)
-        if storage is not None:
-            awaiting = storage.get(user_id, {}).get("awaiting_name", False)
-        else:
-            awaiting = context.application.user_data.get(user_id, {}).get("awaiting_name", False)
+    awaiting = user_id in AWAITING_NAME_USERS
+    if not awaiting:
+        awaiting = context.user_data.get("awaiting_name", False)
+        if not awaiting and context.application:
+            storage = getattr(context.application, "_user_data", None)
+            if storage is not None:
+                awaiting = storage.get(user_id, {}).get("awaiting_name", False)
+            else:
+                awaiting = context.application.user_data.get(user_id, {}).get(
+                    "awaiting_name", False
+                )
     logger.debug("NAME: entered, awaiting=%s", awaiting)
     if not awaiting:
         return
@@ -1407,7 +1434,11 @@ def register_handlers(application: Application, include_start: bool = False) -> 
     application.add_handler(CommandHandler("exit", quit_cmd))
     application.add_handler(CommandHandler("chatid", chat_id_handler))
     application.add_handler(
-        MessageHandler(filters.TEXT & (~filters.COMMAND), handle_name, block=True),
+        MessageHandler(
+            filters.TEXT & (~filters.COMMAND) & AWAITING_COMPOSE_NAME_FILTER,
+            handle_name,
+            block=True,
+        ),
         group=-1,
     )
     application.add_handler(CallbackQueryHandler(time_selected, pattern="^(time_|adm_test)"))

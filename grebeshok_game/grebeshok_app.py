@@ -40,6 +40,7 @@ from telegram import (
     KeyboardButton,
     KeyboardButtonRequestUsers,
     ReplyKeyboardMarkup,
+    Message,
     Update,
 )
 from telegram.ext import (
@@ -162,6 +163,22 @@ FINISHED_GAMES: Dict[Tuple[int, int], GameState] = {}
 BASE_MSG_IDS: Dict[Tuple[int, int], int] = {}
 LAST_REFRESH: Dict[Tuple[int, int], float] = {}
 REFRESH_LOCKS: Dict[Tuple[int, int], asyncio.Lock] = {}
+
+# Users currently expected to provide their name
+AWAITING_GREBESHOK_NAME_USERS: Set[int] = set()
+
+
+class AwaitingGrebeshokNameFilter(filters.MessageFilter):
+    """Filter that matches messages from players awaiting a name."""
+
+    name = "grebeshok_awaiting_name"
+
+    def filter(self, message: Message) -> bool:
+        user = getattr(message, "from_user", None)
+        return bool(user and user.id in AWAITING_GREBESHOK_NAME_USERS)
+
+
+AWAITING_GREBESHOK_NAME_FILTER = AwaitingGrebeshokNameFilter()
 
 
 def game_key(chat_id: int, thread_id: Optional[int]) -> Tuple[int, int]:
@@ -327,7 +344,12 @@ async def awaiting_grebeshok_name_guard(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Ensure the user supplies a name before processing commands."""
-    if not context.user_data.get("awaiting_grebeshok_name"):
+    user = update.effective_user
+    user_id = user.id if user else None
+    awaiting = bool(user_id and user_id in AWAITING_GREBESHOK_NAME_USERS)
+    if not awaiting:
+        awaiting = context.user_data.get("awaiting_grebeshok_name", False)
+    if not awaiting:
         return
     message = update.effective_message
     if not message:
@@ -346,17 +368,38 @@ async def awaiting_grebeshok_name_guard(
     raise ApplicationHandlerStop
 
 
+def mark_awaiting_grebeshok_name(context: CallbackContext, user_id: int) -> None:
+    AWAITING_GREBESHOK_NAME_USERS.add(user_id)
+    context.user_data["awaiting_grebeshok_name"] = True
+    if context.application:
+        storage = getattr(context.application, "_user_data", None)
+        if storage is not None:
+            user_store = storage.setdefault(user_id, {})
+        else:
+            user_store = context.application.user_data.setdefault(user_id, {})
+        user_store["awaiting_grebeshok_name"] = True
+
+
 def clear_awaiting_grebeshok_name(
     context: CallbackContext, user_id: int
 ) -> None:
     """Remove awaiting name flags for a player from context storages."""
+    AWAITING_GREBESHOK_NAME_USERS.discard(user_id)
     context.user_data.pop("awaiting_grebeshok_name", None)
     if context.application:
-        user_store = context.application.user_data.get(user_id)
-        if user_store is not None:
-            user_store.pop("awaiting_grebешok_name", None)
-            if not user_store:
-                context.application.user_data.pop(user_id, None)
+        storage = getattr(context.application, "_user_data", None)
+        if storage is not None:
+            user_store = storage.get(user_id)
+            if user_store is not None:
+                user_store.pop("awaiting_grebeshok_name", None)
+                if not user_store:
+                    storage.pop(user_id, None)
+        else:
+            user_store = context.application.user_data.get(user_id)
+            if user_store is not None:
+                user_store.pop("awaiting_grebeshok_name", None)
+                if not user_store:
+                    context.application.user_data.pop(user_id, None)
 
 
 # ---------------------------------------------------------------------------
@@ -401,7 +444,7 @@ async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     JOIN_CODES[code] = gid
     context.user_data["invite_code"] = code
 
-    context.user_data["awaiting_grebeshok_name"] = True
+    mark_awaiting_grebeshok_name(context, host_id)
     await reply_game_message(message, context, "Игра создана. Введите ваше имя:")
 
 
@@ -464,7 +507,7 @@ async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     game.player_chats[user_id] = chat_id
     CHAT_GAMES[chat_id] = game
-    context.user_data["awaiting_grebeshok_name"] = True
+    mark_awaiting_grebeshok_name(context, user_id)
     await reply_game_message(update.message, context, "Введите ваше имя:")
 
 
@@ -610,18 +653,21 @@ async def reset_for_chat(chat_id: int, user_id: int, context: CallbackContext) -
 
 
 async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    awaiting = context.user_data.get("awaiting_grebeshok_name", False)
-    logger.debug("NAME: entered, awaiting=%s", awaiting)
+    user = update.effective_user
+    user_id = user.id if user else None
+    awaiting = bool(user_id and user_id in AWAITING_GREBESHOK_NAME_USERS)
     if not awaiting:
+        awaiting = context.user_data.get("awaiting_grebeshok_name", False)
+    logger.debug("NAME: entered, awaiting=%s", awaiting)
+    if not awaiting or user_id is None:
         return
-    user_id = update.effective_user.id
     name = update.message.text.strip()
     game = next((g for g in ACTIVE_GAMES.values() if user_id in g.players), None)
     if not game:
         return
     player = game.players[user_id]
     player.name = name
-    context.user_data.pop("awaiting_grebeshok_name", None)
+    clear_awaiting_grebeshok_name(context, user_id)
     formatted_name = format_player_name(player)
     await reply_game_message(
         update.message, context, f"Имя установлено: {formatted_name}"
@@ -1237,7 +1283,11 @@ def register_handlers(application: Application, include_start: bool = False) -> 
     application.add_handler(CommandHandler("join", join_cmd))
     application.add_handler(CommandHandler("exit", quit_cmd))
     application.add_handler(
-        MessageHandler(filters.TEXT & (~filters.COMMAND), handle_name, block=True),
+        MessageHandler(
+            filters.TEXT & (~filters.COMMAND) & AWAITING_GREBESHOK_NAME_FILTER,
+            handle_name,
+            block=True,
+        ),
         group=-1,
     )
     application.add_handler(
