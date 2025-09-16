@@ -77,6 +77,31 @@ async def choose_game(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         pass
 
 
+async def quit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if not message:
+        return
+    chat = update.effective_chat
+    chat_id = chat.id if chat else None
+    thread_id = message.message_thread_id if message else None
+
+    if chat_id is not None:
+        compose_game_state = compose_game.get_game(chat_id, thread_id)
+        if compose_game_state:
+            await compose_game.quit_cmd(update, context)
+            return
+
+    user = update.effective_user
+    user_id = user.id if user else None
+    if user_id is not None:
+        for game in grebeshok_game.ACTIVE_GAMES.values():
+            if user_id in game.players:
+                await grebeshok_game.quit_cmd(update, context)
+                return
+
+    await message.reply_text("Игра не запущена")
+
+
 @app.on_event("startup")
 async def on_startup() -> None:
     global APPLICATION
@@ -85,6 +110,7 @@ async def on_startup() -> None:
     compose_game.BOT_USERNAME = bot_username
     grebeshok_game.BOT_USERNAME = bot_username
     APPLICATION.add_handler(CommandHandler("start", start))
+    APPLICATION.add_handler(CommandHandler("quit", quit_command, block=False))
     APPLICATION.add_handler(CallbackQueryHandler(choose_game, pattern="^game_"))
     await APPLICATION.initialize()
     await APPLICATION.start()

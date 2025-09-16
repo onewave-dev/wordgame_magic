@@ -276,7 +276,8 @@ WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "/webhook")
 def mark_awaiting_name(context: CallbackContext, user_id: int) -> None:
     context.user_data["awaiting_name"] = True
     if context.application:
-        context.application.user_data[user_id]["awaiting_name"] = True
+        user_store = context.application.user_data.setdefault(user_id, {})
+        user_store["awaiting_name"] = True
 
 
 def clear_awaiting_name(context: CallbackContext, user_id: int) -> None:
@@ -286,7 +287,11 @@ def clear_awaiting_name(context: CallbackContext, user_id: int) -> None:
         if user_store is not None:
             user_store.pop("awaiting_name", None)
             if not user_store:
-                context.application._user_data.pop(user_id, None)
+                storage = getattr(context.application, "_user_data", None)
+                if storage is not None:
+                    storage.pop(user_id, None)
+                else:
+                    context.application.user_data.pop(user_id, None)
 
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1324,7 +1329,7 @@ def register_handlers(application: Application, include_start: bool = False) -> 
         application.add_handler(CommandHandler("start", start_cmd))
     application.add_handler(CommandHandler("newgame", newgame))
     application.add_handler(CommandHandler("join", join_cmd))
-    application.add_handler(CommandHandler(["quit", "exit"], quit_cmd))
+    application.add_handler(CommandHandler("exit", quit_cmd))
     application.add_handler(CommandHandler("chatid", chat_id_handler))
     application.add_handler(
         MessageHandler(filters.TEXT & (~filters.COMMAND), handle_name, block=False),
