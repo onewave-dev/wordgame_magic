@@ -1128,7 +1128,7 @@ def register_handlers(application: Application, include_start: bool = False) -> 
     )
     application.add_handler(CommandHandler("newgame", newgame))
     application.add_handler(CommandHandler("join", join_cmd))
-    application.add_handler(CommandHandler(["quit", "exit"], quit_cmd))
+    application.add_handler(CommandHandler("exit", quit_cmd))
     application.add_handler(
         MessageHandler(filters.TEXT & (~filters.COMMAND), handle_name, block=False),
         group=0,
