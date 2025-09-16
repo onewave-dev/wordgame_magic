@@ -276,7 +276,7 @@ WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "/webhook")
 def mark_awaiting_name(context: CallbackContext, user_id: int) -> None:
     context.user_data["awaiting_name"] = True
     if context.application:
-        context.application.user_data.setdefault(user_id, {})["awaiting_name"] = True
+        context.application.user_data[user_id]["awaiting_name"] = True
 
 
 def clear_awaiting_name(context: CallbackContext, user_id: int) -> None:
@@ -286,7 +286,7 @@ def clear_awaiting_name(context: CallbackContext, user_id: int) -> None:
         if user_store is not None:
             user_store.pop("awaiting_name", None)
             if not user_store:
-                context.application.user_data.pop(user_id, None)
+                context.application._user_data.pop(user_id, None)
 
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
