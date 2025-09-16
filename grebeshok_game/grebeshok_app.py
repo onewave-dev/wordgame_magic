@@ -63,6 +63,7 @@ WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "/webhook")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
 MESSAGE_RATE_LIMIT = float(os.environ.get("MESSAGE_RATE_LIMIT", "1"))
+ALLOWED_UPDATES = ["message", "callback_query"]
 
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
@@ -1140,7 +1141,7 @@ async def on_startup() -> None:
             await APPLICATION.bot.set_webhook(
                 url=webhook_url,
                 secret_token=WEBHOOK_SECRET,
-                allowed_updates=[],
+                allowed_updates=ALLOWED_UPDATES,
             )
 
 
@@ -1158,7 +1159,7 @@ async def webhook_check(context: CallbackContext) -> None:
         await APPLICATION.bot.set_webhook(
             url=webhook_url,
             secret_token=WEBHOOK_SECRET,
-            allowed_updates=[],
+            allowed_updates=ALLOWED_UPDATES,
         )
 
 
@@ -1178,7 +1179,7 @@ async def set_webhook() -> JSONResponse:
     await APPLICATION.bot.set_webhook(
         url=webhook_url,
         secret_token=WEBHOOK_SECRET,
-        allowed_updates=[],
+        allowed_updates=ALLOWED_UPDATES,
     )
     return JSONResponse({"url": webhook_url})
 
@@ -1190,7 +1191,7 @@ async def reset_webhook() -> JSONResponse:
     await APPLICATION.bot.set_webhook(
         url=webhook_url,
         secret_token=WEBHOOK_SECRET,
-        allowed_updates=[],
+        allowed_updates=ALLOWED_UPDATES,
     )
     return JSONResponse({"reset_to": webhook_url})
 
