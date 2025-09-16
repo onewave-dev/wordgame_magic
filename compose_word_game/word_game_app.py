@@ -391,9 +391,13 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     user_id = user.id
     message = update.message or update.effective_message
-    awaiting = False
-    if context.application:
-        awaiting = context.application.user_data.get(user_id, {}).get("awaiting_name", False)
+    awaiting = context.user_data.get("awaiting_name", False)
+    if not awaiting and context.application:
+        storage = getattr(context.application, "_user_data", None)
+        if storage is not None:
+            awaiting = storage.get(user_id, {}).get("awaiting_name", False)
+        else:
+            awaiting = context.application.user_data.get(user_id, {}).get("awaiting_name", False)
     if not awaiting:
         return
     if not message:
