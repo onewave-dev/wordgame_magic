@@ -688,6 +688,8 @@ async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = f"Игра прервана участником {name}. Вы можете начать заново, нажав /start"
     await reply_game_message(update.message, context, text)
     await broadcast(game.game_id, text, skip_chat_id=chat_id)
+    for user_id in list(game.players.keys()):
+        clear_awaiting_name(context, user_id)
     BASE_MSG_IDS.pop(game.game_id, None)
     for cid in set(game.player_chats.values()):
         CHAT_GAMES.pop((cid, 0), None)
