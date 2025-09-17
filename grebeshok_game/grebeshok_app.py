@@ -675,13 +675,15 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if game.status == "config" and user_id == game.host_id:
         buttons = [
             [
-                InlineKeyboardButton("3 минуты", callback_data="time_3"),
-                InlineKeyboardButton("5 минут", callback_data="time_5"),
+                InlineKeyboardButton("3 минуты", callback_data="greb_time_3"),
+                InlineKeyboardButton("5 минут", callback_data="greb_time_5"),
             ]
         ]
         if user_id == ADMIN_ID:
             buttons.append([
-                InlineKeyboardButton("[адм.] Тестовая игра", callback_data="adm_test")
+                InlineKeyboardButton(
+                    "[адм.] Тестовая игра", callback_data="greb_adm_test"
+                )
             ])
         await reply_game_message(
             update.message,
@@ -708,13 +710,17 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     game = ACTIVE_GAMES.get(gid)
     if not game or query.from_user.id != game.host_id:
         return
-    if query.data == "adm_test" and query.from_user.id == ADMIN_ID:
+    if query.data == "greb_adm_test" and query.from_user.id == ADMIN_ID:
         game.time_limit = 1
         game.players[0] = Player(user_id=0, name="Бот")
         game.status = "waiting"
         await query.edit_message_text("Тестовая игра: выберите режим букв")
-    elif query.data.startswith("time_"):
-        game.time_limit = int(query.data.split("_")[1])
+    elif query.data.startswith("greb_time_"):
+        try:
+            game.time_limit = int(query.data.rsplit("_", 1)[1])
+        except (IndexError, ValueError):
+            logger.warning("Unexpected greb_time callback data: %s", query.data)
+            return
         await query.edit_message_text("Длительность установлена")
         game.status = "waiting"
         code = context.user_data.get("invite_code")
@@ -1111,8 +1117,8 @@ async def restart_game(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     buttons = [
         [
-            InlineKeyboardButton("3 минуты", callback_data="time_3"),
-            InlineKeyboardButton("5 минут", callback_data="time_5"),
+            InlineKeyboardButton("3 минуты", callback_data="greb_time_3"),
+            InlineKeyboardButton("5 минут", callback_data="greb_time_5"),
         ]
     ]
     await send_game_message(
@@ -1305,7 +1311,9 @@ def register_handlers(application: Application, include_start: bool = False) -> 
         ),
         group=1,
     )
-    application.add_handler(CallbackQueryHandler(time_selected, pattern="^(time_|adm_test)"))
+    application.add_handler(
+        CallbackQueryHandler(time_selected, pattern="^(greb_time_|greb_adm_test)")
+    )
     application.add_handler(CallbackQueryHandler(letters_selected, pattern="^letters_"))
     application.add_handler(CallbackQueryHandler(combo_chosen, pattern="^combo_"))
     application.add_handler(CallbackQueryHandler(start_round_cb, pattern="^start_round$"))
