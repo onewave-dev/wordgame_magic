@@ -912,10 +912,12 @@ async def auto_pick_combo(
 
 async def combo_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
+    if not query or not query.message:
+        return
     await query.answer()
-    chat = query.message.chat
-    gid = game_key(chat.id, query.message.message_thread_id)
-    game = ACTIVE_GAMES.get(gid)
+    message = query.message
+    chat = message.chat
+    game = get_game(chat.id, message.message_thread_id)
     if not game or game.base_letters:
         return
     if not query.data.startswith("combo_"):
