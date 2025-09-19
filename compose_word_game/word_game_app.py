@@ -1069,6 +1069,8 @@ async def end_game(context: CallbackContext) -> None:
         lines.append("")
 
     if winners:
+        if not lines or lines[-1] != "":
+            lines.append("")
         if len(winners) == 1:
             lines.append(
                 f"🏆 <b>Победитель:</b> {html.escape(format_name(winners[0]))}"
