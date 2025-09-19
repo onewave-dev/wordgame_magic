@@ -36,7 +36,7 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-from telegram.error import TelegramError
+from telegram.error import BadRequest, Forbidden, TelegramError
 from llm_utils import describe_word
 from shared.choice_timer import ChoiceTimerHandle, send_choice_with_timer
 
@@ -688,13 +688,64 @@ async def users_shared_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         code = secrets.token_urlsafe(8)
         JOIN_CODES[code] = game.game_id
     link = f"https://t.me/{BOT_USERNAME}?start={code}"
+    delivered: List[str] = []
+    permanent_failures: List[Tuple[str, str]] = []
+    transient_failures: List[Tuple[str, str]] = []
+
+    def format_shared_user(shared_user: object) -> str:
+        first_name = getattr(shared_user, "first_name", "") or ""
+        last_name = getattr(shared_user, "last_name", "") or ""
+        username = getattr(shared_user, "username", "") or ""
+        user_id = getattr(shared_user, "user_id", None)
+        name_parts = " ".join(part for part in [first_name.strip(), last_name.strip()] if part)
+        if username:
+            if name_parts:
+                name_parts = f"{name_parts} (@{username})"
+            else:
+                name_parts = f"@{username}"
+        if not name_parts:
+            name_parts = f"ID {user_id}" if user_id is not None else "неизвестный пользователь"
+        return name_parts
+
     for u in shared.users:
+        user_label = format_shared_user(u)
         try:
             await context.bot.send_message(u.user_id, f"Приглашение в игру: {link}")
             game.invited_users.add(u.user_id)
-        except Exception:
-            continue
-    await reply_game_message(message, context, "Приглашения отправлены")
+            delivered.append(user_label)
+        except (Forbidden, BadRequest) as exc:
+            logger.warning("Failed to deliver invite to %s: %s", user_label, exc)
+            permanent_failures.append((user_label, str(exc)))
+        except TelegramError as exc:
+            logger.warning("Temporary error delivering invite to %s: %s", user_label, exc)
+            transient_failures.append((user_label, str(exc)))
+        except Exception as exc:  # pragma: no cover - safeguard for unexpected errors
+            logger.exception("Unexpected error delivering invite to %s", user_label)
+            transient_failures.append((user_label, str(exc)))
+
+    response_lines: List[str] = []
+    if delivered:
+        response_lines.append("✅ Приглашения доставлены: " + ", ".join(delivered))
+
+    if permanent_failures or transient_failures:
+        if permanent_failures:
+            failures_text = "; ".join(
+                f"{name} — бот не может начать диалог ({reason})"
+                for name, reason in permanent_failures
+            )
+            response_lines.append("❌ Не удалось отправить: " + failures_text)
+        if transient_failures:
+            failures_text = "; ".join(f"{name} — {reason}" for name, reason in transient_failures)
+            response_lines.append("⚠️ Временно не удалось отправить: " + failures_text)
+        response_lines.append(
+            "Передайте ссылку тем, кто не получил приглашение: "
+            f"{link}. Попросите их открыть бота вручную или перешлите ссылку."
+        )
+
+    if not response_lines:
+        response_lines.append("❌ Не удалось отправить приглашения. Попробуйте поделиться ссылкой вручную: " + link)
+
+    await reply_game_message(message, context, "\n".join(response_lines))
 
 async def chat_id_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
