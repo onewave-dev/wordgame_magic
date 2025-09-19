@@ -661,7 +661,20 @@ async def invite_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     thread_id = message.message_thread_id
     game = get_game(chat_id, thread_id or 0)
     if not game:
-        return
+        user = update.effective_user
+        if user:
+            fallback_game = get_game(user.id, 0)
+            if fallback_game:
+                fallback_game.player_chats[user.id] = chat_id
+                CHAT_GAMES[(chat_id, thread_id or 0)] = fallback_game.game_id
+                game = fallback_game
+        if not game:
+            await reply_game_message(
+                message,
+                context,
+                "Игра не найдена, начните заново командой /start",
+            )
+            return
     code = next((c for c, gid in JOIN_CODES.items() if gid == game.game_id), None)
     if not code:
         code = secrets.token_urlsafe(8)
