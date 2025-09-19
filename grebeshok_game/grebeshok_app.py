@@ -1033,12 +1033,11 @@ async def finish_game(game: GameState, context: CallbackContext, reason: str) ->
             lines.append(f"{i}. {html.escape(w)}")
         lines.append(f"<b>Итог:</b> {p.points}")
         lines.append("")
-    if lines and lines[-1] == "":
-        lines.pop()
-
     max_points = players_sorted[0].points if players_sorted else 0
     winners = [p for p in players_sorted if p.points == max_points]
     if winners:
+        if not lines or lines[-1] != "":
+            lines.append("")
         if len(winners) == 1:
             lines.append(
                 f"🏆 <b>Победитель:</b> {html.escape(format_player_name(winners[0]))}"
@@ -1048,6 +1047,8 @@ async def finish_game(game: GameState, context: CallbackContext, reason: str) ->
                 "🏆 <b>Победители:</b> "
                 + ", ".join(html.escape(format_player_name(p)) for p in winners)
             )
+    elif lines and lines[-1] == "":
+        lines.pop()
 
     text = "\n".join(lines).rstrip()
     await broadcast(game, text, context, parse_mode="HTML")
