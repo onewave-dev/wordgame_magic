@@ -1179,21 +1179,57 @@ async def question_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     text = message.text.strip()
     if not text.startswith("?"):
         return
-    word = normalize_word(text[1:].strip())
+    raw_word = text[1:].strip()
+    word = normalize_word(raw_word)
     if not word:
         return
+    game = get_game(message.chat_id, message.message_thread_id)
+    player_name = ""
+    if game:
+        player = game.players.get(message.from_user.id) if message.from_user else None
+        if player and player.name:
+            player_name = player.name
+    if not player_name and message.from_user:
+        player_name = message.from_user.full_name or message.from_user.first_name or "Игрок"
+    if not player_name:
+        player_name = "Игрок"
+    display_word = raw_word or word
     prefix = (
         "Есть такое слово в словаре."
         if word in DICT
         else "Этого слова нет в словаре игры"
     )
     llm_text = await describe_word(word)
-    await reply_game_message(
-        message,
-        context,
-        f"<b>{word}</b> {prefix}\n\n{llm_text}",
-        parse_mode="HTML",
+    response_text = (
+        f"<b>{html.escape(player_name)}</b> запросил: <b>{html.escape(display_word)}</b>\n\n"
+        f"<b>{html.escape(word)}</b> {prefix}\n\n{llm_text}"
     )
+    delivered = False
+    if game:
+        sent_chats: Set[int] = set()
+        for chat_id in game.player_chats.values():
+            if chat_id in sent_chats:
+                continue
+            sent_chats.add(chat_id)
+            try:
+                await send_game_message(
+                    chat_id,
+                    None,
+                    context,
+                    response_text,
+                    parse_mode="HTML",
+                )
+                if chat_id == message.chat_id:
+                    delivered = True
+            except TelegramError:
+                logger.debug("Failed to send question response to chat %s", chat_id)
+    if not delivered:
+        await reply_game_message(
+            message,
+            context,
+            response_text,
+            parse_mode="HTML",
+        )
     raise ApplicationHandlerStop
 
 
