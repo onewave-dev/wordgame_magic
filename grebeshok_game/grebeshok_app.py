@@ -40,6 +40,7 @@ from telegram import (
     KeyboardButton,
     KeyboardButtonRequestUsers,
     ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
     Message,
     Update,
 )
@@ -134,6 +135,7 @@ class GameState:
     viability_threshold: int = int(os.getenv("VIABILITY_THRESHOLD", "50"))
     player_chats: Dict[int, int] = field(default_factory=dict)
     base_msg_counts: Dict[Tuple[int, int], int] = field(default_factory=dict)
+    invite_keyboard_hidden: bool = False
 
     def game_id(self, chat_id: int, thread_id: Optional[int]) -> Tuple[int, int]:
         return (chat_id, thread_id or 0)
@@ -706,6 +708,7 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     query = update.callback_query
     await query.answer()
     chat = query.message.chat
+    thread_id = query.message.message_thread_id
     gid = game_key(chat.id, query.message.message_thread_id)
     game = ACTIVE_GAMES.get(gid)
     if not game or query.from_user.id != game.host_id:
@@ -714,6 +717,15 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         game.time_limit = 1
         game.players[0] = Player(user_id=0, name="Бот")
         game.status = "waiting"
+        if not game.invite_keyboard_hidden:
+            await send_game_message(
+                chat.id,
+                thread_id,
+                context,
+                "Клавиатура приглашений скрыта.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            game.invite_keyboard_hidden = True
         await query.edit_message_text("Тестовая игра: выберите режим букв")
     elif query.data.startswith("greb_time_"):
         try:
@@ -740,6 +752,16 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await send_game_message(
                 chat.id, None, context, "Пригласите игроков:", reply_markup=markup
             )
+            game.invite_keyboard_hidden = False
+        if not game.invite_keyboard_hidden:
+            await send_game_message(
+                chat.id,
+                thread_id,
+                context,
+                "Клавиатура приглашений скрыта.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            game.invite_keyboard_hidden = True
 
     await prompt_letters_selection(game, context)
 
@@ -750,6 +772,15 @@ async def prompt_letters_selection(game: GameState, context: CallbackContext) ->
     chat_id = game.player_chats.get(game.host_id)
     if not chat_id:
         return
+    if not game.invite_keyboard_hidden:
+        await send_game_message(
+            chat_id,
+            None,
+            context,
+            "Клавиатура приглашений скрыта.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        game.invite_keyboard_hidden = True
     keyboard = InlineKeyboardMarkup(
         [
             [
