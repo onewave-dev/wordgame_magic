@@ -21,6 +21,7 @@ from telegram import (
     ForceReply,
     KeyboardButton,
     ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
     KeyboardButtonRequestUsers,
     Message,
     User,
@@ -112,6 +113,7 @@ class GameState:
     jobs: Dict[str, any] = field(default_factory=dict)
     invited_users: Set[int] = field(default_factory=set)
     base_msg_counts: Dict[Tuple[int, int], int] = field(default_factory=dict)
+    invite_keyboard_hidden: bool = False
 
 
 ACTIVE_GAMES: Dict[str, GameState] = {}
@@ -392,6 +394,15 @@ async def maybe_show_base_options(
     if not game or game.status != "waiting":
         return
     if len(game.players) >= 2 and all(p.name for p in game.players.values()):
+        if not game.invite_keyboard_hidden:
+            await send_game_message(
+                chat_id,
+                thread_id,
+                context,
+                "Клавиатура приглашений скрыта.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            game.invite_keyboard_hidden = True
         await send_game_message(
             chat_id,
             thread_id,
@@ -548,6 +559,15 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         game.time_limit = 1.5
         game.players[0] = Player(user_id=0, name="Бот")
         game.status = "waiting"
+        if not game.invite_keyboard_hidden:
+            await send_game_message(
+                chat_id,
+                thread_id,
+                context,
+                "Клавиатура приглашений скрыта.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            game.invite_keyboard_hidden = True
         await query.edit_message_text("Тестовая игра создана")
         await maybe_show_base_options(chat_id, thread_id, context, game)
         return
@@ -570,6 +590,15 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             code = next((c for c, gid in JOIN_CODES.items() if gid == game.game_id), None)
             if code:
                 JOIN_CODES.pop(code, None)
+            if not game.invite_keyboard_hidden:
+                await send_game_message(
+                    chat_id,
+                    thread_id,
+                    context,
+                    "Клавиатура приглашений скрыта.",
+                    reply_markup=ReplyKeyboardRemove(),
+                )
+                game.invite_keyboard_hidden = True
             await query.edit_message_text("Длительность установлена")
             await maybe_show_base_options(chat_id, thread_id, context, game)
             return
@@ -597,6 +626,7 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "Выберите способ приглашения:",
             reply_markup=keyboard,
         )
+        game.invite_keyboard_hidden = False
 
 
 async def add_player_via_invite(
