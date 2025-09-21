@@ -64,7 +64,7 @@ WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "/webhook")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
 MESSAGE_RATE_LIMIT = float(os.environ.get("MESSAGE_RATE_LIMIT", "1"))
-ALLOWED_UPDATES = ["message", "callback_query"]
+ALLOWED_UPDATES = ["message", "callback_query", "users_shared"]
 
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
