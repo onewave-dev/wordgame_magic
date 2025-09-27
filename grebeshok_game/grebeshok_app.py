@@ -1110,12 +1110,11 @@ def build_grebeshok_stats_message(game: GameState) -> str:
         lines.append("Нет данных по базовым буквам.")
     lines.append("")
 
-    lines.append("🪄 <b>Самое редкое слово</b>")
+    lines.append("🏅 <b>Самое редкое слово</b>")
     if rarest:
         zipf, _, player, word = rarest
         lines.append(
             f"• {html.escape(word)} — {html.escape(format_player_name(player))}"
-            f" (Zipf {zipf:.3f})"
         )
     else:
         lines.append("Нет данных о редкости слов.")

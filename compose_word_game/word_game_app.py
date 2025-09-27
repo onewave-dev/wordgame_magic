@@ -1104,11 +1104,11 @@ def build_compose_stats_message(
 
     lines = ["✨ <b>Интересная статистика</b>", ""]
 
-    lines.append("📊 <b>Длинные слова</b>")
+    lines.append("🏅 <b>Лидеры по длинным словам (6 и более букв):</b>")
     if long_word_counts:
         for player, count in long_word_counts:
             lines.append(
-                f"• {html.escape(format_name(player))} — {count}"
+                f"• {html.escape(format_name(player))} — {count} шт."
             )
     else:
         lines.append("Нет слов длиной 6+ букв.")
@@ -1125,12 +1125,11 @@ def build_compose_stats_message(
         lines.append("Нет данных о самых длинных словах.")
     lines.append("")
 
-    lines.append("🪄 <b>Самое редкое слово</b>")
+    lines.append("🏅 <b>Самое редкое слово</b>")
     if rarest:
         zipf, _, player, word = rarest
         lines.append(
             f"• {html.escape(word)} — {html.escape(format_name(player))}"
-            f" (Zipf {zipf:.3f})"
         )
     else:
         lines.append("Нет данных о редкости слов.")
@@ -1197,6 +1196,9 @@ async def end_game(context: CallbackContext) -> None:
                 + ", ".join(html.escape(format_name(p)) for p in winners)
             )
     message = "\n".join(lines).rstrip()
+    await broadcast(game.game_id, message, parse_mode="HTML")
+    stats_message = build_compose_stats_message(game, format_name)
+    await broadcast(game.game_id, stats_message, parse_mode="HTML")
     keyboard = InlineKeyboardMarkup(
         [
             [
@@ -1212,10 +1214,11 @@ async def end_game(context: CallbackContext) -> None:
         ]
     )
     await broadcast(
-        game.game_id, message, reply_markup=keyboard, parse_mode="HTML"
+        game.game_id,
+        "Выберите, как продолжить игру:",
+        reply_markup=keyboard,
+        parse_mode="HTML",
     )
-    stats_message = build_compose_stats_message(game, format_name)
-    await broadcast(game.game_id, stats_message, parse_mode="HTML")
     choice_handle = game.jobs.pop("base_choice", None)
     if isinstance(choice_handle, ChoiceTimerHandle):
         await choice_handle.complete(final_timer_text=None)
