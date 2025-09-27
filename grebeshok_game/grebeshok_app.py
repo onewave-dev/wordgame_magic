@@ -57,6 +57,7 @@ from telegram.ext import (
 
 from llm_utils import describe_word
 from shared.choice_timer import ChoiceTimerHandle, send_choice_with_timer
+from shared.word_stats import get_zipf
 
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -136,6 +137,7 @@ class GameState:
     player_chats: Dict[int, int] = field(default_factory=dict)
     base_msg_counts: Dict[Tuple[int, int], int] = field(default_factory=dict)
     invite_keyboard_hidden: bool = False
+    word_history: List[Tuple[int, str]] = field(default_factory=list)
 
     def game_id(self, chat_id: int, thread_id: Optional[int]) -> Tuple[int, int]:
         return (chat_id, thread_id or 0)
@@ -999,6 +1001,7 @@ async def start_round_cb(
 
 
 async def start_round(game: GameState, context: CallbackContext) -> None:
+    game.word_history.clear()
     game.status = "running"
     gid = game_key_from_state(game)
     warn_time = max(game.time_limit * 60 - 60, 0)
@@ -1033,6 +1036,91 @@ async def end_game_job(context: CallbackContext) -> None:
     game = ACTIVE_GAMES.get(gid)
     if game:
         await finish_game(game, context, "Время вышло")
+
+
+def _grebeshok_history(game: GameState) -> List[Tuple[int, str]]:
+    if game.word_history:
+        return list(game.word_history)
+    history: List[Tuple[int, str]] = []
+    for player in game.players.values():
+        for word in player.words:
+            history.append((player.user_id, word))
+    return history
+
+
+def build_grebeshok_stats_message(game: GameState) -> str:
+    history = _grebeshok_history(game)
+    base_letters = tuple(ch.lower().replace("ё", "е") for ch in game.base_letters)
+
+    longest: Optional[Tuple[int, int, Player, str]] = None
+    richest_base: Optional[Tuple[int, int, Player, str]] = None
+    rarest: Optional[Tuple[float, int, Player, str]] = None
+
+    for index, (player_id, word) in enumerate(history):
+        player = game.players.get(player_id)
+        if not player:
+            continue
+        length = len(word)
+        if length and (
+            longest is None
+            or length > longest[0]
+            or (length == longest[0] and index < longest[1])
+        ):
+            longest = (length, index, player, word)
+
+        base_count = sum(1 for ch in word.replace("ё", "е") if ch in base_letters)
+        if (
+            richest_base is None
+            or base_count > richest_base[0]
+            or (base_count == richest_base[0] and index < richest_base[1])
+        ):
+            richest_base = (base_count, index, player, word)
+
+        zipf = get_zipf(word)
+        if zipf is None:
+            continue
+        if (
+            rarest is None
+            or zipf < rarest[0]
+            or (zipf == rarest[0] and index < rarest[1])
+        ):
+            rarest = (zipf, index, player, word)
+
+    lines = ["✨ <b>Интересная статистика</b>", ""]
+
+    lines.append("🏅 <b>Самое длинное слово</b>")
+    if longest:
+        length, _, player, word = longest
+        lines.append(
+            f"• {html.escape(word)} — {html.escape(format_player_name(player))}"
+            f" ({length} букв)"
+        )
+    else:
+        lines.append("Нет данных о самых длинных словах.")
+    lines.append("")
+
+    lines.append("🧩 <b>Слово с наибольшим количеством базовых букв</b>")
+    if richest_base and richest_base[0] > 0:
+        count, _, player, word = richest_base
+        lines.append(
+            f"• {html.escape(word)} — {html.escape(format_player_name(player))}"
+            f" ({count} букв из базовых)"
+        )
+    else:
+        lines.append("Нет данных по базовым буквам.")
+    lines.append("")
+
+    lines.append("🪄 <b>Самое редкое слово</b>")
+    if rarest:
+        zipf, _, player, word = rarest
+        lines.append(
+            f"• {html.escape(word)} — {html.escape(format_player_name(player))}"
+            f" (Zipf {zipf:.3f})"
+        )
+    else:
+        lines.append("Нет данных о редкости слов.")
+
+    return "\n".join(lines).rstrip()
 
 
 async def finish_game(game: GameState, context: CallbackContext, reason: str) -> None:
@@ -1083,6 +1171,9 @@ async def finish_game(game: GameState, context: CallbackContext, reason: str) ->
 
     text = "\n".join(lines).rstrip()
     await broadcast(game, text, context, parse_mode="HTML")
+
+    stats_message = build_grebeshok_stats_message(game)
+    await broadcast(game, stats_message, context, parse_mode="HTML")
 
     # Prepare restart keyboard and send to players
     keyboard = InlineKeyboardMarkup(
@@ -1181,6 +1272,7 @@ async def dummy_bot_word(context: CallbackContext) -> None:
     player.words.append(word)
     player.points += 1
     game.used_words.add(word)
+    game.word_history.append((player.user_id, word))
     await broadcast(game, f"{format_player_name(player)}: {word}", context)
 
 
@@ -1264,6 +1356,7 @@ async def handle_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         player.words.append(word)
         player.points += 1
         game.used_words.add(word)
+        game.word_history.append((player.user_id, word))
         accepted.append(word)
         await broadcast(
             game,
