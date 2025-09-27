@@ -329,3 +329,186 @@ def test_compose_and_grebeshok_name_filters_isolated():
 
     asyncio.run(run(True))
     asyncio.run(run(False))
+
+
+def test_compose_end_game_sends_stats_message():
+    async def run():
+        old_active = app.ACTIVE_GAMES.copy()
+        old_base_ids = app.BASE_MSG_IDS.copy()
+        old_chat_games = app.CHAT_GAMES.copy()
+        try:
+            app.ACTIVE_GAMES.clear()
+            app.BASE_MSG_IDS.clear()
+            app.CHAT_GAMES.clear()
+
+            game = app.GameState(host_id=1, game_id="gid")
+            player_a = app.Player(user_id=1, name="Алиса", words=["молоко", "самовар"])
+            player_a.points = 3
+            player_b = app.Player(user_id=2, name="Боб", words=["тест", "самолет"])
+            player_b.points = 2
+            game.players = {1: player_a, 2: player_b}
+            game.base_word = "пример"
+            game.word_history = [(1, "молоко"), (2, "самолет"), (1, "самовар")]
+            game.player_chats = {1: 42, 2: 43}
+            app.ACTIVE_GAMES["gid"] = game
+            app.BASE_MSG_IDS["gid"] = 10
+            app.CHAT_GAMES[(42, 0)] = "gid"
+
+            context = SimpleNamespace(
+                job=SimpleNamespace(chat_id=42, data={"thread_id": None}),
+                bot=SimpleNamespace(delete_message=AsyncMock()),
+            )
+
+            zipf_map = {"молоко": 3.2, "самолет": 3.0, "самовар": 2.5}
+
+            with (
+                patch.object(app, "broadcast", new=AsyncMock()) as broadcast_mock,
+                patch.object(app, "get_zipf", side_effect=lambda w: zipf_map.get(w)),
+            ):
+                await app.end_game(context)
+
+            assert broadcast_mock.await_count == 2
+            stats_call = broadcast_mock.await_args_list[1]
+            _, stats_text = stats_call.args[:2]
+            assert "📊 <b>Длинные слова</b>" in stats_text
+            assert "Алиса" in stats_text and "2" in stats_text
+            assert "самолет" in stats_text
+            assert "самовар" in stats_text
+        finally:
+            app.ACTIVE_GAMES.clear()
+            app.ACTIVE_GAMES.update(old_active)
+            app.BASE_MSG_IDS.clear()
+            app.BASE_MSG_IDS.update(old_base_ids)
+            app.CHAT_GAMES.clear()
+            app.CHAT_GAMES.update(old_chat_games)
+
+    asyncio.run(run())
+
+
+def test_compose_stats_handle_empty_data():
+    async def run():
+        old_active = app.ACTIVE_GAMES.copy()
+        old_base_ids = app.BASE_MSG_IDS.copy()
+        old_chat_games = app.CHAT_GAMES.copy()
+        try:
+            app.ACTIVE_GAMES.clear()
+            app.BASE_MSG_IDS.clear()
+            app.CHAT_GAMES.clear()
+
+            game = app.GameState(host_id=1, game_id="gid2")
+            player = app.Player(user_id=1, name="Алиса", words=[])
+            game.players = {1: player}
+            game.base_word = "пример"
+            app.ACTIVE_GAMES["gid2"] = game
+            app.CHAT_GAMES[(99, 0)] = "gid2"
+
+            context = SimpleNamespace(
+                job=SimpleNamespace(chat_id=99, data={"thread_id": None}),
+                bot=SimpleNamespace(delete_message=AsyncMock()),
+            )
+
+            with (
+                patch.object(app, "broadcast", new=AsyncMock()) as broadcast_mock,
+                patch.object(app, "get_zipf", return_value=None),
+            ):
+                await app.end_game(context)
+
+            assert broadcast_mock.await_count == 2
+            stats_text = broadcast_mock.await_args_list[1].args[1]
+            assert "Нет слов длиной 6+ букв" in stats_text
+            assert "Нет данных о самых длинных словах" in stats_text
+            assert "Нет данных о редкости слов" in stats_text
+        finally:
+            app.ACTIVE_GAMES.clear()
+            app.ACTIVE_GAMES.update(old_active)
+            app.BASE_MSG_IDS.clear()
+            app.BASE_MSG_IDS.update(old_base_ids)
+            app.CHAT_GAMES.clear()
+            app.CHAT_GAMES.update(old_chat_games)
+
+    asyncio.run(run())
+
+
+def test_grebeshok_finish_game_stats_message():
+    async def run():
+        old_active = greb_app.ACTIVE_GAMES.copy()
+        old_finished = greb_app.FINISHED_GAMES.copy()
+        try:
+            greb_app.ACTIVE_GAMES.clear()
+            greb_app.FINISHED_GAMES.clear()
+
+            game = greb_app.GameState(host_id=1)
+            game.base_letters = ("к", "о", "т")
+            player_a = greb_app.Player(user_id=1, name="Глеб", words=["котята"])
+            player_a.points = 1
+            player_b = greb_app.Player(user_id=2, name="Оля", words=["котофей", "тотем"])
+            player_b.points = 2
+            game.players = {1: player_a, 2: player_b}
+            game.word_history = [(1, "котята"), (2, "котофей"), (2, "тотем")]
+            key = (200, 0)
+            greb_app.ACTIVE_GAMES[key] = game
+
+            context = SimpleNamespace(bot=SimpleNamespace(send_message=AsyncMock()))
+
+            zipf_map = {"котята": 3.0, "котофей": 3.2, "тотем": 2.4}
+
+            with (
+                patch.object(greb_app, "broadcast", new=AsyncMock()) as broadcast_mock,
+                patch.object(greb_app, "send_game_message", new=AsyncMock()),
+                patch.object(
+                    greb_app, "get_zipf", side_effect=lambda w: zipf_map.get(w)
+                ),
+            ):
+                await greb_app.finish_game(game, context, "Время вышло")
+
+            assert broadcast_mock.await_count >= 2
+            stats_text = broadcast_mock.await_args_list[1].args[1]
+            assert "Самое длинное слово" in stats_text
+            assert "котофей" in stats_text
+            assert "котята" in stats_text
+            assert "тотем" in stats_text
+        finally:
+            greb_app.ACTIVE_GAMES.clear()
+            greb_app.ACTIVE_GAMES.update(old_active)
+            greb_app.FINISHED_GAMES.clear()
+            greb_app.FINISHED_GAMES.update(old_finished)
+
+    asyncio.run(run())
+
+
+def test_grebeshok_stats_handle_empty_data():
+    async def run():
+        old_active = greb_app.ACTIVE_GAMES.copy()
+        old_finished = greb_app.FINISHED_GAMES.copy()
+        try:
+            greb_app.ACTIVE_GAMES.clear()
+            greb_app.FINISHED_GAMES.clear()
+
+            game = greb_app.GameState(host_id=1)
+            game.base_letters = ("к", "о", "т")
+            player = greb_app.Player(user_id=1, name="Глеб", words=[])
+            game.players = {1: player}
+            key = (300, 0)
+            greb_app.ACTIVE_GAMES[key] = game
+
+            context = SimpleNamespace(bot=SimpleNamespace(send_message=AsyncMock()))
+
+            with (
+                patch.object(greb_app, "broadcast", new=AsyncMock()) as broadcast_mock,
+                patch.object(greb_app, "send_game_message", new=AsyncMock()),
+                patch.object(greb_app, "get_zipf", return_value=None),
+            ):
+                await greb_app.finish_game(game, context, "Время вышло")
+
+            assert broadcast_mock.await_count >= 2
+            stats_text = broadcast_mock.await_args_list[1].args[1]
+            assert "Нет данных о самых длинных словах" in stats_text
+            assert "Нет данных по базовым буквам" in stats_text
+            assert "Нет данных о редкости слов" in stats_text
+        finally:
+            greb_app.ACTIVE_GAMES.clear()
+            greb_app.ACTIVE_GAMES.update(old_active)
+            greb_app.FINISHED_GAMES.clear()
+            greb_app.FINISHED_GAMES.update(old_finished)
+
+    asyncio.run(run())

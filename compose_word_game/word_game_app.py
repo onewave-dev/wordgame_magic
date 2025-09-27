@@ -10,7 +10,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Optional, Set, List, Tuple
+from typing import Callable, Dict, Optional, Set, List, Tuple
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
@@ -40,6 +40,7 @@ from telegram.ext import (
 from telegram.error import BadRequest, Forbidden, TelegramError
 from llm_utils import describe_word
 from shared.choice_timer import ChoiceTimerHandle, send_choice_with_timer
+from shared.word_stats import get_zipf
 
 # --- Utilities --------------------------------------------------------------
 
@@ -114,6 +115,7 @@ class GameState:
     invited_users: Set[int] = field(default_factory=set)
     base_msg_counts: Dict[Tuple[int, int], int] = field(default_factory=dict)
     invite_keyboard_hidden: bool = False
+    word_history: List[Tuple[int, str]] = field(default_factory=list)
 
 
 ACTIVE_GAMES: Dict[str, GameState] = {}
@@ -1052,6 +1054,90 @@ async def warn_time(context: CallbackContext) -> None:
         await broadcast(game.game_id, "Осталась 1 минута!")
 
 
+def _compose_word_history(game: GameState) -> List[Tuple[int, str]]:
+    if game.word_history:
+        return list(game.word_history)
+    history: List[Tuple[int, str]] = []
+    for player in game.players.values():
+        for word in player.words:
+            history.append((player.user_id, word))
+    return history
+
+
+def build_compose_stats_message(
+    game: GameState, format_name: Callable[[Player], str]
+) -> str:
+    history = _compose_word_history(game)
+
+    long_word_counts: List[Tuple[Player, int]] = []
+    for player in game.players.values():
+        count = sum(1 for word in player.words if len(word) >= 6)
+        if count:
+            long_word_counts.append((player, count))
+    long_word_counts.sort(
+        key=lambda item: (-item[1], item[0].name.casefold())
+    )
+
+    longest: Optional[Tuple[int, int, Player, str]] = None
+    rarest: Optional[Tuple[float, int, Player, str]] = None
+    for index, (player_id, word) in enumerate(history):
+        player = game.players.get(player_id)
+        if not player:
+            continue
+        length = len(word)
+        if length and (
+            longest is None
+            or length > longest[0]
+            or (length == longest[0] and index < longest[1])
+        ):
+            longest = (length, index, player, word)
+
+        zipf = get_zipf(word)
+        if zipf is None:
+            continue
+        if (
+            rarest is None
+            or zipf < rarest[0]
+            or (zipf == rarest[0] and index < rarest[1])
+        ):
+            rarest = (zipf, index, player, word)
+
+    lines = ["✨ <b>Интересная статистика</b>", ""]
+
+    lines.append("📊 <b>Длинные слова</b>")
+    if long_word_counts:
+        for player, count in long_word_counts:
+            lines.append(
+                f"• {html.escape(format_name(player))} — {count}"
+            )
+    else:
+        lines.append("Нет слов длиной 6+ букв.")
+    lines.append("")
+
+    lines.append("🏅 <b>Самое длинное слово</b>")
+    if longest:
+        length, _, player, word = longest
+        lines.append(
+            f"• {html.escape(word)} — {html.escape(format_name(player))}"
+            f" ({length} букв)"
+        )
+    else:
+        lines.append("Нет данных о самых длинных словах.")
+    lines.append("")
+
+    lines.append("🪄 <b>Самое редкое слово</b>")
+    if rarest:
+        zipf, _, player, word = rarest
+        lines.append(
+            f"• {html.escape(word)} — {html.escape(format_name(player))}"
+            f" (Zipf {zipf:.3f})"
+        )
+    else:
+        lines.append("Нет данных о редкости слов.")
+
+    return "\n".join(lines).rstrip()
+
+
 async def end_game(context: CallbackContext) -> None:
     chat_id = context.job.chat_id
     data = context.job.data or {}
@@ -1128,6 +1214,8 @@ async def end_game(context: CallbackContext) -> None:
     await broadcast(
         game.game_id, message, reply_markup=keyboard, parse_mode="HTML"
     )
+    stats_message = build_compose_stats_message(game, format_name)
+    await broadcast(game.game_id, stats_message, parse_mode="HTML")
     choice_handle = game.jobs.pop("base_choice", None)
     if isinstance(choice_handle, ChoiceTimerHandle):
         await choice_handle.complete(final_timer_text=None)
@@ -1147,6 +1235,7 @@ async def reset_game(game: GameState) -> None:
     game.base_word = ""
     game.letters.clear()
     game.status = "config"
+    game.word_history.clear()
     choice_handle = game.jobs.pop("base_choice", None)
     if isinstance(choice_handle, ChoiceTimerHandle):
         await choice_handle.complete(final_timer_text=None)
@@ -1398,6 +1487,7 @@ async def word_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             continue
         game.used_words.add(w)
         player.words.append(w)
+        game.word_history.append((player.user_id, w))
         pts = 2 if len(w) >= 6 else 1
         player.points += pts
         message = f"Зачтено: {w}"
@@ -1462,6 +1552,7 @@ async def bot_move(context: CallbackContext) -> None:
     bot_player = game.players.get(0)
     if bot_player:
         bot_player.words.append(word)
+        game.word_history.append((bot_player.user_id, word))
         pts = 2 if len(word) >= 6 else 1
         bot_player.points += pts
         game.used_words.add(word)
@@ -1518,6 +1609,7 @@ async def handle_submission(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             continue
         game.used_words.add(w)
         player.words.append(w)
+        game.word_history.append((player.user_id, w))
         pts = 2 if len(w) >= 6 else 1
         player.points += pts
         msg = f"Зачтено: {w}"
