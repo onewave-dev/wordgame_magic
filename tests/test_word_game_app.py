@@ -367,11 +367,11 @@ def test_compose_end_game_sends_stats_message():
             ):
                 await app.end_game(context)
 
-            assert broadcast_mock.await_count == 2
+            assert broadcast_mock.await_count == 3
             stats_call = broadcast_mock.await_args_list[1]
             _, stats_text = stats_call.args[:2]
-            assert "📊 <b>Длинные слова</b>" in stats_text
-            assert "Алиса" in stats_text and "2" in stats_text
+            assert "🏅 <b>Лидеры по длинным словам (6 и более букв):</b>" in stats_text
+            assert "Алиса" in stats_text and "2 шт." in stats_text
             assert "самолет" in stats_text
             assert "самовар" in stats_text
         finally:
@@ -413,7 +413,7 @@ def test_compose_stats_handle_empty_data():
             ):
                 await app.end_game(context)
 
-            assert broadcast_mock.await_count == 2
+            assert broadcast_mock.await_count == 3
             stats_text = broadcast_mock.await_args_list[1].args[1]
             assert "Нет слов длиной 6+ букв" in stats_text
             assert "Нет данных о самых длинных словах" in stats_text
