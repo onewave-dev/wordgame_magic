@@ -726,3 +726,65 @@ def test_grebeshok_stats_handle_empty_data():
             greb_app.FINISHED_GAMES.update(old_finished)
 
     asyncio.run(run())
+
+
+def test_grebeshok_handle_word_stops_after_status_change():
+    async def run():
+        old_active = greb_app.ACTIVE_GAMES.copy()
+        old_chat_games = greb_app.CHAT_GAMES.copy()
+        try:
+            greb_app.ACTIVE_GAMES.clear()
+            greb_app.CHAT_GAMES.clear()
+
+            host_id = 1
+            player_id = 42
+            chat_id = 420
+            game = greb_app.GameState(host_id=host_id)
+            game.status = "running"
+            game.base_letters = ("к", "о", "т")
+            player = greb_app.Player(user_id=player_id, name="Игрок")
+            game.players = {player_id: player}
+            game.player_chats = {player_id: chat_id}
+
+            key = (chat_id, 0)
+            greb_app.ACTIVE_GAMES[key] = game
+            greb_app.CHAT_GAMES[chat_id] = game
+
+            message = DummyMessage(chat_id, player_id, text="котик котомка")
+            update = SimpleNamespace(
+                message=message,
+                effective_chat=message.chat,
+                effective_user=message.from_user,
+            )
+            context = SimpleNamespace(user_data={}, bot=SimpleNamespace())
+
+            async def broadcast_side_effect(*args, **kwargs):
+                text = args[1] if len(args) > 1 else kwargs.get("text", "")
+                if "котик" in text:
+                    game.status = "finished"
+
+            with (
+                patch.object(greb_app, "DICTIONARY", {"котик", "котомка"}),
+                patch.object(
+                    greb_app,
+                    "broadcast",
+                    new=AsyncMock(side_effect=broadcast_side_effect),
+                ) as broadcast_mock,
+                patch.object(greb_app, "reply_game_message", new=AsyncMock()) as reply_mock,
+                patch.object(greb_app, "schedule_refresh_base_letters", lambda *a, **kw: None),
+            ):
+                await greb_app.handle_word(update, context)
+
+            assert player.words == ["котик"]
+            assert game.word_history == [(player_id, "котик")]
+            assert game.used_words == {"котик"}
+            assert broadcast_mock.await_count == 1
+            texts = [call.args[2] for call in reply_mock.await_args_list]
+            assert all("котомка" not in text for text in texts)
+        finally:
+            greb_app.ACTIVE_GAMES.clear()
+            greb_app.ACTIVE_GAMES.update(old_active)
+            greb_app.CHAT_GAMES.clear()
+            greb_app.CHAT_GAMES.update(old_chat_games)
+
+    asyncio.run(run())
