@@ -22,15 +22,16 @@ top of this foundation.
 
 from __future__ import annotations
 
+import asyncio
+import html
 import json
 import logging
+import math
 import os
 import random
 import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
-import asyncio
-import html
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -126,7 +127,7 @@ class Player:
 @dataclass
 class GameState:
     host_id: int
-    time_limit: int = 3  # minutes
+    time_limit: float = 3.0  # minutes
     letters_mode: int = 0
     base_letters: Tuple[str, ...] = field(default_factory=tuple)
     players: Dict[int, Player] = field(default_factory=dict)
@@ -846,7 +847,7 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not game or query.from_user.id != game.host_id:
         return
     if query.data == "greb_adm_test" and query.from_user.id == ADMIN_ID:
-        game.time_limit = 1
+        game.time_limit = 1.5
         game.players[0] = Player(user_id=0, name="Бот")
         game.status = "waiting"
         if not game.invite_keyboard_hidden:
@@ -1382,9 +1383,9 @@ async def restart_game(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     new_game.player_chats = old_game.player_chats.copy()
     new_game.player_chats[new_host_id] = new_host_chat.id
 
-    is_admin_test = 0 in old_game.players or old_game.time_limit == 1
+    is_admin_test = 0 in old_game.players or math.isclose(old_game.time_limit, 1.5)
     if is_admin_test:
-        new_game.time_limit = 1
+        new_game.time_limit = 1.5
         new_game.status = "waiting"
 
     ACTIVE_GAMES[new_gid] = new_game
