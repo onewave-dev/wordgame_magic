@@ -1069,7 +1069,8 @@ def build_grebeshok_stats_message(game: GameState) -> str:
     base_letters = tuple(ch.lower().replace("ё", "е") for ch in game.base_letters)
 
     longest: Optional[Tuple[int, int, Player, str]] = None
-    richest_base: Optional[Tuple[int, int, Player, str]] = None
+    richest_base: Dict[int, Tuple[int, int, str]] = {}
+    max_base_count = 0
     rarest: Optional[Tuple[float, int, Player, str]] = None
 
     for index, (player_id, word) in enumerate(history):
@@ -1085,12 +1086,14 @@ def build_grebeshok_stats_message(game: GameState) -> str:
             longest = (length, index, player, word)
 
         base_count = sum(1 for ch in word.replace("ё", "е") if ch in base_letters)
-        if (
-            richest_base is None
-            or base_count > richest_base[0]
-            or (base_count == richest_base[0] and index < richest_base[1])
-        ):
-            richest_base = (base_count, index, player, word)
+        if base_count:
+            best = richest_base.get(player_id)
+            if best is None or base_count > best[0] or (
+                base_count == best[0] and index < best[1]
+            ):
+                richest_base[player_id] = (base_count, index, word)
+            if base_count > max_base_count:
+                max_base_count = base_count
 
         zipf = get_zipf(word)
         if zipf is None:
@@ -1116,12 +1119,21 @@ def build_grebeshok_stats_message(game: GameState) -> str:
     lines.append("")
 
     lines.append("🧩 <b>Слово с наибольшим количеством базовых букв</b>")
-    if richest_base and richest_base[0] > 0:
-        count, _, player, word = richest_base
-        lines.append(
-            f"• {html.escape(word)} — {html.escape(format_player_name(player))}"
-            f" ({count} букв из базовых)"
-        )
+    base_threshold = len(base_letters)
+    if max_base_count > base_threshold:
+        winners: List[Tuple[int, Player, str, int]] = []
+        for player_id, (count, idx, word) in richest_base.items():
+            if count == max_base_count:
+                player = game.players.get(player_id)
+                if not player:
+                    continue
+                winners.append((idx, player, word, count))
+        winners.sort(key=lambda item: (item[0], item[1].name.casefold()))
+        for _, player, word, count in winners:
+            lines.append(
+                f"• {html.escape(word)} — {html.escape(format_player_name(player))}"
+                f" ({count} букв из базовых)"
+            )
     else:
         lines.append("Нет данных по базовым буквам.")
     lines.append("")
