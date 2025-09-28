@@ -577,6 +577,19 @@ async def reset_for_chat(chat_id: int, user_id: int, context: CallbackContext) -
         if key[0] == chat_id or chat_id in game.player_chats.values() or user_id in game.players:
             finished_keys.add(key)
 
+    players_to_clear: Set[int] = set()
+    for key in active_keys:
+        game = ACTIVE_GAMES.get(key)
+        if game:
+            players_to_clear.update(game.players.keys())
+    for key in finished_keys:
+        game = FINISHED_GAMES.get(key)
+        if game:
+            players_to_clear.update(game.players.keys())
+
+    for pid in players_to_clear:
+        clear_awaiting_grebeshok_name(context, pid)
+
     for key in list(active_keys):
         game = ACTIVE_GAMES.get(key)
         if not game:
@@ -600,9 +613,6 @@ async def reset_for_chat(chat_id: int, user_id: int, context: CallbackContext) -
                     except Exception:
                         pass
         game.jobs.clear()
-
-        for pid in list(game.players.keys()):
-            clear_awaiting_grebeshok_name(context, pid)
 
         related_chats = set(game.player_chats.values())
         related_keys = set(game.base_msg_counts.keys())
@@ -631,9 +641,6 @@ async def reset_for_chat(chat_id: int, user_id: int, context: CallbackContext) -
         game = FINISHED_GAMES.pop(key, None)
         if not game:
             continue
-
-        for pid in list(game.players.keys()):
-            clear_awaiting_grebeshok_name(context, pid)
 
         related_chats = set(game.player_chats.values())
         related_keys = set(game.base_msg_counts.keys())
