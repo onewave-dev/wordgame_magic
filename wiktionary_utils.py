@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from typing import Optional, Tuple
 
 from urllib import parse, request
@@ -89,7 +90,7 @@ def lookup_wiktionary_meaning(word: str) -> Optional[str]:
     if headline is None:
         return None
 
-    heading = headline.find_parent(["h2", "h3", "h4"]) or headline
+    heading = headline.find_parent(re.compile(r"^h[2-6]$")) or headline
     text: Optional[str] = None
     for sibling in heading.next_siblings:
         if getattr(sibling, "name", None) is None:

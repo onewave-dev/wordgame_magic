@@ -59,3 +59,5 @@ def test_describe_word_wiktionary_missing():
     mock_llm.assert_called_once()
     mock_lookup.assert_called_once_with("фуп")
     assert message == "Такого слова не существует."
+
+

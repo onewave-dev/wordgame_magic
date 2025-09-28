@@ -87,3 +87,26 @@ def test_lookup_wiktionary_meaning_trim():
 
     assert result == "Первое значение"
 
+
+H5_HEADING_HTML = """
+<html>
+  <body>
+    <h4>Другой раздел</h4>
+    <h5><span id=\"Значение\">Значение</span></h5>
+    <ol>
+      <li>Толкование из углубленного заголовка</li>
+    </ol>
+  </body>
+</html>
+""".encode("utf-8")
+
+
+def test_lookup_wiktionary_meaning_deep_heading():
+    def fake_urlopen(url):
+        return DummyResponse(H5_HEADING_HTML)
+
+    with patch("wiktionary_utils.request.urlopen", fake_urlopen):
+        result = wiktionary_utils.lookup_wiktionary_meaning("трен")
+
+    assert result == "Толкование из углубленного заголовка"
+
