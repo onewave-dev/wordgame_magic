@@ -1273,8 +1273,11 @@ async def restart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await query.answer()
     chat_id = query.message.chat.id
     thread_id = query.message.message_thread_id
+    final_text = "Игра завершена. Для новой игры с новыми участниками нажмите /start"
     game = get_game(chat_id, thread_id or 0)
     if not game:
+        if query.data == "restart_no":
+            await query.edit_message_text(final_text)
         return
     if query.data == "restart_yes":
         await reset_game(game)
@@ -1295,9 +1298,7 @@ async def restart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             reply_markup=InlineKeyboardMarkup(buttons),
         )
     else:
-        text = (
-            "Игра завершена. Для новой игры с новыми участниками нажмите /start"
-        )
+        text = final_text
         await query.edit_message_text(text)
         BASE_MSG_IDS.pop(game.game_id, None)
         sent: Set[int] = set()

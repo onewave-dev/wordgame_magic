@@ -33,12 +33,16 @@ class DummyCallbackQuery:
         self.from_user = SimpleNamespace(id=user_id)
         self.answered = False
         self.deleted = False
+        self.edited_texts = []
 
     async def answer(self, *args, **kwargs):
         self.answered = True
 
     async def delete_message(self):
         self.deleted = True
+
+    async def edit_message_text(self, text: str, **kwargs):
+        self.edited_texts.append((text, kwargs))
 
 
 def test_start_then_handle_name_clears_flag():
@@ -582,6 +586,55 @@ def test_compose_stats_handle_empty_data():
             app.ACTIVE_GAMES.update(old_active)
             app.BASE_MSG_IDS.clear()
             app.BASE_MSG_IDS.update(old_base_ids)
+            app.CHAT_GAMES.clear()
+            app.CHAT_GAMES.update(old_chat_games)
+
+    asyncio.run(run())
+
+
+def test_restart_handler_handles_repeated_restart_no_callbacks():
+    async def run():
+        old_active = app.ACTIVE_GAMES.copy()
+        old_chat_games = app.CHAT_GAMES.copy()
+        try:
+            app.ACTIVE_GAMES.clear()
+            app.CHAT_GAMES.clear()
+
+            host_id = 501
+            host_chat_id = 601
+            other_chat_id = 602
+            game = app.GameState(host_id=host_id, game_id="restart_game")
+            game.player_chats = {host_id: host_chat_id, 999: other_chat_id}
+            app.ACTIVE_GAMES["restart_game"] = game
+            app.CHAT_GAMES[(host_chat_id, 0)] = "restart_game"
+
+            bot = SimpleNamespace(send_message=AsyncMock())
+            context = SimpleNamespace(bot=bot)
+
+            message = DummyMessage(host_chat_id, host_id)
+            query = DummyCallbackQuery("restart_no", message, host_id)
+            update = SimpleNamespace(callback_query=query)
+
+            await app.restart_handler(update, context)
+
+            expected_text = (
+                "Игра завершена. Для новой игры с новыми участниками нажмите /start"
+            )
+            assert query.edited_texts and query.edited_texts[-1][0] == expected_text
+            assert bot.send_message.await_count == 1
+            assert "restart_game" not in app.ACTIVE_GAMES
+            assert (host_chat_id, 0) not in app.CHAT_GAMES
+
+            second_query = DummyCallbackQuery("restart_no", message, host_id)
+            second_update = SimpleNamespace(callback_query=second_query)
+
+            await app.restart_handler(second_update, context)
+
+            assert second_query.edited_texts and second_query.edited_texts[-1][0] == expected_text
+            assert bot.send_message.await_count == 1
+        finally:
+            app.ACTIVE_GAMES.clear()
+            app.ACTIVE_GAMES.update(old_active)
             app.CHAT_GAMES.clear()
             app.CHAT_GAMES.update(old_chat_games)
 
