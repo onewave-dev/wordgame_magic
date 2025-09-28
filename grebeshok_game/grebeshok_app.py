@@ -44,7 +44,7 @@ from telegram import (
     Message,
     Update,
 )
-from telegram.error import TelegramError
+from telegram.error import BadRequest, Forbidden, TelegramError
 from telegram.ext import (
     Application,
     ApplicationHandlerStop,
@@ -138,6 +138,7 @@ class GameState:
     player_chats: Dict[int, int] = field(default_factory=dict)
     base_msg_counts: Dict[Tuple[int, int], int] = field(default_factory=dict)
     invite_keyboard_hidden: bool = False
+    invited_users: Set[int] = field(default_factory=set)
     word_history: List[Tuple[int, str]] = field(default_factory=list)
 
     def game_id(self, chat_id: int, thread_id: Optional[int]) -> Tuple[int, int]:
@@ -160,6 +161,8 @@ CHAT_GAMES: Dict[int, GameState] = {}
 
 # Invite join codes -> game key
 JOIN_CODES: Dict[str, Tuple[int, int]] = {}
+
+INVITE_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 # Finished games stored for quick restart
 FINISHED_GAMES: Dict[Tuple[int, int], GameState] = {}
@@ -188,6 +191,28 @@ AWAITING_GREBESHOK_NAME_FILTER = AwaitingGrebeshokNameFilter()
 
 def game_key(chat_id: int, thread_id: Optional[int]) -> Tuple[int, int]:
     return (chat_id, thread_id or 0)
+
+
+def ensure_invite_code(
+    game: GameState, context: Optional[CallbackContext] = None
+) -> str:
+    """Return an invite code for the game, generating one if necessary."""
+
+    try:
+        gid = game_key_from_state(game)
+    except KeyError:
+        host_chat_id = game.player_chats.get(game.host_id)
+        gid = game.game_id(host_chat_id or 0, None) if host_chat_id else None
+    code: Optional[str] = None
+    if gid is not None:
+        code = next((c for c, stored in JOIN_CODES.items() if stored == gid), None)
+    if not code:
+        code = "".join(random.choices(INVITE_CODE_ALPHABET, k=6))
+        if gid is not None:
+            JOIN_CODES[code] = gid
+    if context is not None:
+        context.user_data["invite_code"] = code
+    return code
 
 
 def get_game(chat_id: int, thread_id: Optional[int]) -> Optional[GameState]:
@@ -471,9 +496,7 @@ async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     game.player_chats[host_id] = chat.id
     ACTIVE_GAMES[gid] = game
 
-    code = "".join(random.choices("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", k=6))
-    JOIN_CODES[code] = gid
-    context.user_data["invite_code"] = code
+    ensure_invite_code(game, context)
 
     mark_awaiting_grebeshok_name(context, host_id)
     await reply_game_message(message, context, "Игра создана. Введите ваше имя:")
@@ -482,11 +505,34 @@ async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def invite_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send deep-link invitation to the host on text button press."""
 
-    code = context.user_data.get("invite_code")
-    if not code:
+    message = update.message
+    if not message:
         return
+    chat_id = message.chat.id
+    thread_id = message.message_thread_id
+    game = get_game(chat_id, thread_id or 0)
+    if not game:
+        user = update.effective_user
+        if user:
+            fallback_game = get_game(user.id, 0)
+            if fallback_game:
+                fallback_game.player_chats[user.id] = chat_id
+                CHAT_GAMES[chat_id] = fallback_game
+                game = fallback_game
+        if not game:
+            await reply_game_message(
+                message,
+                context,
+                "Игра не найдена, начните заново командой /start",
+            )
+            return
+    code = ensure_invite_code(game, context)
     link = f"https://t.me/{BOT_USERNAME}?start=join_{code}"
-    await reply_game_message(update.message, context, f"Ссылка для приглашения:\n{link}")
+    await reply_game_message(
+        message,
+        context,
+        f"Ссылка приглашения: {link}",
+    )
 
 
 async def users_shared_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -494,27 +540,77 @@ async def users_shared_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     if not message or not message.users_shared:
         return
     shared = message.users_shared
-    count = len(shared.users)
     chat_id = update.effective_chat.id
-    thread_id = update.effective_message.message_thread_id
+    thread_id = message.message_thread_id
     game = get_game(chat_id, thread_id or 0)
     if not game:
         return
-    code = context.user_data.get("invite_code")
-    if not code:
-        gid = game_key(chat_id, thread_id)
-        code = next((c for c, g in JOIN_CODES.items() if g == gid), None)
-        if not code:
-            return
-        context.user_data["invite_code"] = code
+    code = ensure_invite_code(game, context)
     link = f"https://t.me/{BOT_USERNAME}?start=join_{code}"
+
+    delivered: List[str] = []
+    permanent_failures: List[Tuple[str, str]] = []
+    transient_failures: List[Tuple[str, str]] = []
+
+    def format_shared_user(shared_user: object) -> str:
+        first_name = getattr(shared_user, "first_name", "") or ""
+        last_name = getattr(shared_user, "last_name", "") or ""
+        username = getattr(shared_user, "username", "") or ""
+        user_id = getattr(shared_user, "user_id", None)
+        name_parts = " ".join(part for part in [first_name.strip(), last_name.strip()] if part)
+        if username:
+            if name_parts:
+                name_parts = f"{name_parts} (@{username})"
+            else:
+                name_parts = f"@{username}"
+        if not name_parts:
+            name_parts = f"ID {user_id}" if user_id is not None else "неизвестный пользователь"
+        return name_parts
+
     for u in shared.users:
+        user_label = format_shared_user(u)
         try:
-            await send_game_message(u.user_id, None, context, f"Вас приглашают в игру: {link}")
-        except Exception:
-            continue
-    text = "Приглашение отправлено" if count == 1 else "Приглашения отправлены"
-    await reply_game_message(update.message, context, text)
+            await context.bot.send_message(u.user_id, f"Приглашение в игру: {link}")
+            game.invited_users.add(u.user_id)
+            delivered.append(user_label)
+        except (Forbidden, BadRequest) as exc:
+            logger.warning("Failed to deliver invite to %s: %s", user_label, exc)
+            permanent_failures.append((user_label, str(exc)))
+        except TelegramError as exc:
+            logger.warning("Temporary error delivering invite to %s: %s", user_label, exc)
+            transient_failures.append((user_label, str(exc)))
+        except Exception as exc:  # pragma: no cover - safeguard for unexpected errors
+            logger.exception("Unexpected error delivering invite to %s", user_label)
+            transient_failures.append((user_label, str(exc)))
+
+    response_lines: List[str] = []
+    if delivered:
+        response_lines.append("✅ Приглашения доставлены: " + ", ".join(delivered))
+
+    if permanent_failures or transient_failures:
+        if permanent_failures:
+            failures_text = "; ".join(
+                f"{name} — бот не может начать диалог ({reason})"
+                for name, reason in permanent_failures
+            )
+            response_lines.append("❌ Не удалось отправить: " + failures_text)
+        if transient_failures:
+            failures_text = "; ".join(
+                f"{name} — {reason}" for name, reason in transient_failures
+            )
+            response_lines.append("⚠️ Временно не удалось отправить: " + failures_text)
+        response_lines.append(
+            "Передайте ссылку тем, кто не получил приглашение: "
+            f"{link}. Попросите их открыть бота вручную или перешлите ссылку."
+        )
+
+    if not response_lines:
+        response_lines.append(
+            "❌ Не удалось отправить приглашения. Попробуйте поделиться ссылкой вручную: "
+            + link
+        )
+
+    await reply_game_message(message, context, "\n".join(response_lines))
 
 
 async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -763,29 +859,38 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         except (IndexError, ValueError):
             logger.warning("Unexpected greb_time callback data: %s", query.data)
             return
-        await query.edit_message_text("Длительность установлена")
         game.status = "waiting"
-        code = context.user_data.get("invite_code")
-        if code:
-            buttons = [
+        ready_to_start = len(game.players) >= 2 and all(
+            p.name for p in game.players.values()
+        )
+        if ready_to_start:
+            await query.edit_message_text("Длительность установлена")
+            if not game.invite_keyboard_hidden:
+                await hide_invite_keyboard(chat.id, thread_id, context)
+                game.invite_keyboard_hidden = True
+        else:
+            await query.edit_message_text("Игра создана. Пригласите участников.")
+            ensure_invite_code(game, context)
+            keyboard = ReplyKeyboardMarkup(
                 [
-                    KeyboardButton(
-                        "Пригласить из контактов",
-                        request_users=KeyboardButtonRequestUsers(request_id=1),
-                    )
+                    [
+                        KeyboardButton(
+                            "Пригласить из контактов",
+                            request_users=KeyboardButtonRequestUsers(request_id=1),
+                        ),
+                        KeyboardButton("Создать ссылку"),
+                    ]
                 ],
-                [KeyboardButton("Создать ссылку")],
-            ]
-            markup = ReplyKeyboardMarkup(
-                buttons, resize_keyboard=True, one_time_keyboard=False
+                resize_keyboard=True,
+                one_time_keyboard=True,
             )
-            await send_game_message(
-                chat.id, None, context, "Пригласите игроков:", reply_markup=markup
+            await reply_game_message(
+                query.message,
+                context,
+                "Выберите способ приглашения:",
+                reply_markup=keyboard,
             )
             game.invite_keyboard_hidden = False
-        if not game.invite_keyboard_hidden:
-            await hide_invite_keyboard(chat.id, thread_id, context)
-            game.invite_keyboard_hidden = True
 
     await prompt_letters_selection(game, context)
 
