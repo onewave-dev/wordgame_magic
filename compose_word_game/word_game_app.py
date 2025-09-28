@@ -1328,11 +1328,8 @@ async def question_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not player_name:
         player_name = "Игрок"
     display_word = raw_word or word
-    prefix = (
-        "Есть такое слово в словаре."
-        if word in DICT
-        else "Этого слова нет в словаре игры"
-    )
+    in_dict = word in DICT
+    prefix = "Есть такое слово в словаре." if in_dict else "Этого слова нет в словаре игры"
     llm_text = await describe_word(word)
     response_text = (
         f"<b>{html.escape(player_name)}</b> запросил: <b>{html.escape(display_word)}</b>\n\n"
