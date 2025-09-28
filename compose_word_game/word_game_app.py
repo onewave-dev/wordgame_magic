@@ -358,6 +358,15 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 await reply_game_message(message, context, "Игра не найдена")
         return
     user = update.effective_user
+    try:
+        await reset_for_chat(chat_id, user.id, context)
+        logger.debug(
+            "Reset state for chat %s and user %s before starting a new game", chat_id, user.id
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to reset state for chat %s and user %s: %s", chat_id, user.id, exc
+        )
     game = create_dm_game(user.id)
     if chat_id != user.id:
         game.player_chats[user.id] = chat_id
