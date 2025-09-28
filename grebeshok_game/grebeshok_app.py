@@ -1247,6 +1247,12 @@ async def restart_game(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         new_game.players[uid] = Player(user_id=uid, name=player.name)
     new_game.player_chats = old_game.player_chats.copy()
     new_game.player_chats[new_host_id] = new_host_chat.id
+
+    is_admin_test = 0 in old_game.players or old_game.time_limit == 1
+    if is_admin_test:
+        new_game.time_limit = 1
+        new_game.status = "waiting"
+
     ACTIVE_GAMES[new_gid] = new_game
     FINISHED_GAMES.pop(old_gid, None)
 
@@ -1254,20 +1260,28 @@ async def restart_game(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await broadcast(
         new_game, f"{starter.name} начал(а) новую игру", context
     )
-
-    buttons = [
-        [
-            InlineKeyboardButton("3 минуты", callback_data="greb_time_3"),
-            InlineKeyboardButton("5 минут", callback_data="greb_time_5"),
+    if is_admin_test:
+        await send_game_message(
+            new_host_chat.id,
+            None,
+            context,
+            "Тестовая игра: выберите режим букв",
+        )
+        await prompt_letters_selection(new_game, context)
+    else:
+        buttons = [
+            [
+                InlineKeyboardButton("3 минуты", callback_data="greb_time_3"),
+                InlineKeyboardButton("5 минут", callback_data="greb_time_5"),
+            ]
         ]
-    ]
-    await send_game_message(
-        new_host_chat.id,
-        None,
-        context,
-        "Выберите длительность игры:",
-        reply_markup=InlineKeyboardMarkup(buttons),
-    )
+        await send_game_message(
+            new_host_chat.id,
+            None,
+            context,
+            "Выберите длительность игры:",
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
 
 
 async def dummy_bot_word(context: CallbackContext) -> None:
