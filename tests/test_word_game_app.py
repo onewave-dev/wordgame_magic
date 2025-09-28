@@ -662,7 +662,9 @@ def test_grebeshok_stats_handle_empty_data():
             assert broadcast_mock.await_count >= 2
             stats_text = broadcast_mock.await_args_list[1].args[1]
             assert "Нет данных о самых длинных словах" in stats_text
-            assert "Нет данных по базовым буквам" in stats_text
+            assert (
+                "Никто не составил слова с более чем 3 базовыми буквами." in stats_text
+            )
             assert "Нет данных о редкости слов" in stats_text
         finally:
             greb_app.ACTIVE_GAMES.clear()
