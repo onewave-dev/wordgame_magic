@@ -73,7 +73,8 @@ def test_lookup_wiktionary_meaning_trim():
     html = """
     <html>
       <body>
-        <h2><span id=\"Значение\">Значение</span></h2>
+        <h2><span id=\"Русский\">Русский</span></h2>
+        <h3><span id=\"Значение\">Значение</span></h3>
         <p>Первое значение ◆ дополнительная помета</p>
       </body>
     </html>
@@ -91,6 +92,7 @@ def test_lookup_wiktionary_meaning_trim():
 H5_HEADING_HTML = """
 <html>
   <body>
+    <h2><span id=\"Русский\">Русский</span></h2>
     <h4>Другой раздел</h4>
     <h5><span id=\"Значение\">Значение</span></h5>
     <ol>
@@ -109,4 +111,34 @@ def test_lookup_wiktionary_meaning_deep_heading():
         result = wiktionary_utils.lookup_wiktionary_meaning("трен")
 
     assert result == "Толкование из углубленного заголовка"
+
+
+RUSSIAN_SECTION_NESTED_HTML = """
+<html>
+  <body>
+    <h2><span id=\"Русский\">Русский</span></h2>
+    <div class=\"mw-parser-output\">
+      <div>
+        <h3><span id=\"Значение_2\">Значение</span></h3>
+        <div class=\"t-section\">
+          <div>
+            <p>Определение внутри вложенного контейнера ◆ с пометой</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <h2><span id=\"Английский\">Английский</span></h2>
+  </body>
+</html>
+""".encode("utf-8")
+
+
+def test_lookup_wiktionary_meaning_russian_section_nested():
+    def fake_urlopen(url):
+        return DummyResponse(RUSSIAN_SECTION_NESTED_HTML)
+
+    with patch("wiktionary_utils.request.urlopen", fake_urlopen):
+        result = wiktionary_utils.lookup_wiktionary_meaning("пример")
+
+    assert result == "Определение внутри вложенного контейнера"
 

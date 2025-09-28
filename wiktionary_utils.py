@@ -8,7 +8,7 @@ from typing import Optional, Tuple
 from urllib import parse, request
 from urllib.error import HTTPError, URLError
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString, Tag
 
 logger = logging.getLogger(__name__)
 
@@ -65,12 +65,14 @@ def lookup_wiktionary(word: str) -> Optional[Tuple[bool, bool, str]]:
 def lookup_wiktionary_meaning(word: str) -> Optional[str]:
     """Return the first definition paragraph from the Wiktionary article.
 
-    The function downloads the page ``/wiki/{word}``, locates the section with
-    ``id="Значение"`` and returns the text of the first ``<li>`` or ``<p>``
-    that appears after the heading.  Text after the ``◆`` symbol is trimmed as
-    it usually contains additional usage notes that are not part of the
-    definition shown in chat.  ``None`` is returned when the section is not
-    present or no matching elements are found.
+    The function downloads the page ``/wiki/{word}``, scopes the search to the
+    ``Русский`` section and locates the first heading whose ``id`` starts with
+    ``Значение``.  It returns the text of the first ``<li>`` or ``<p>`` element
+    that appears after the heading (recursing into nested containers when
+    needed).  Text after the ``◆`` symbol is trimmed as it usually contains
+    additional usage notes that are not part of the definition shown in chat.
+    ``None`` is returned when the section is not present or no matching
+    elements are found.
     """
 
     url = f"https://ru.wiktionary.org/wiki/{parse.quote(word)}"
@@ -86,26 +88,58 @@ def lookup_wiktionary_meaning(word: str) -> Optional[str]:
         return None
 
     soup = BeautifulSoup(html, "html.parser")
-    headline = soup.find(id="Значение")
-    if headline is None:
+
+    russian_anchor = soup.find(id="Русский")
+    if russian_anchor is None:
         return None
 
-    heading = headline.find_parent(re.compile(r"^h[2-6]$")) or headline
+    russian_heading = (
+        russian_anchor.find_parent(re.compile(r"^h[2-6]$")) or russian_anchor
+    )
+
+    meaning_anchor: Optional[Tag] = None
+    anchor_pattern = re.compile(r"^Значение")
+    for sibling in russian_heading.next_siblings:
+        if isinstance(sibling, NavigableString):
+            continue
+        if not isinstance(sibling, Tag):
+            continue
+        if sibling.get("id") and anchor_pattern.match(sibling["id"]):
+            meaning_anchor = sibling
+            break
+        found = sibling.find(id=anchor_pattern)
+        if found is not None:
+            meaning_anchor = found
+            break
+        if sibling.name == "h2":
+            # Another language section has started.
+            break
+
+    if meaning_anchor is None:
+        return None
+
+    if re.match(r"^h[2-6]$", getattr(meaning_anchor, "name", "")):
+        heading = meaning_anchor
+    else:
+        heading = meaning_anchor.find_parent(re.compile(r"^h[2-6]$")) or meaning_anchor
+
     text: Optional[str] = None
     for sibling in heading.next_siblings:
-        if getattr(sibling, "name", None) is None:
+        if isinstance(sibling, NavigableString):
             continue
-        if sibling.name == "p":
-            text = sibling.get_text(" ", strip=True)
-            break
-        if sibling.name in {"ol", "ul"}:
-            first_item = sibling.find("li")
-            if first_item is not None:
-                text = first_item.get_text(" ", strip=True)
-                break
-        if sibling.name and sibling.name.startswith("h"):
+        if not isinstance(sibling, Tag):
+            continue
+        if sibling.name and re.match(r"^h[2-6]$", sibling.name):
             # Stop once a new section begins.
             break
+        if sibling.name in {"p", "li"}:
+            candidate = sibling
+        else:
+            candidate = sibling.find(["p", "li"])
+        if candidate is not None:
+            text = candidate.get_text(" ", strip=True)
+            if text:
+                break
 
     if not text:
         return None
