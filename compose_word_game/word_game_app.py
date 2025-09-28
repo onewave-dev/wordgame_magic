@@ -221,6 +221,9 @@ def schedule_refresh_base_button(chat_id: int, thread_id: int, context: Callback
     asyncio.create_task(refresh_base_button(chat_id, thread_id or 0, context))
 
 
+INVISIBLE_MESSAGE = "\u2063"
+
+
 async def send_game_message(chat_id: int, thread_id: Optional[int], context: CallbackContext, text: str, **kwargs):
     if thread_id is None:
         msg = await context.bot.send_message(chat_id, text, **kwargs)
@@ -228,6 +231,22 @@ async def send_game_message(chat_id: int, thread_id: Optional[int], context: Cal
         msg = await context.bot.send_message(chat_id, text, message_thread_id=thread_id, **kwargs)
     schedule_refresh_base_button(chat_id, thread_id or 0, context)
     return msg
+
+
+async def hide_invite_keyboard(chat_id: int, thread_id: Optional[int], context: CallbackContext) -> None:
+    """Remove the invite keyboard without leaving a visible message."""
+
+    msg = await send_game_message(
+        chat_id,
+        thread_id,
+        context,
+        INVISIBLE_MESSAGE,
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    try:
+        await msg.delete()
+    except TelegramError:
+        logger.debug("Failed to delete invite keyboard removal message", exc_info=True)
 
 
 async def reply_game_message(message, context: CallbackContext, text: str, **kwargs):
@@ -397,13 +416,7 @@ async def maybe_show_base_options(
         return
     if len(game.players) >= 2 and all(p.name for p in game.players.values()):
         if not game.invite_keyboard_hidden:
-            await send_game_message(
-                chat_id,
-                thread_id,
-                context,
-                "Клавиатура приглашений скрыта.",
-                reply_markup=ReplyKeyboardRemove(),
-            )
+            await hide_invite_keyboard(chat_id, thread_id, context)
             game.invite_keyboard_hidden = True
         await send_game_message(
             chat_id,
@@ -562,13 +575,7 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         game.players[0] = Player(user_id=0, name="Бот")
         game.status = "waiting"
         if not game.invite_keyboard_hidden:
-            await send_game_message(
-                chat_id,
-                thread_id,
-                context,
-                "Клавиатура приглашений скрыта.",
-                reply_markup=ReplyKeyboardRemove(),
-            )
+            await hide_invite_keyboard(chat_id, thread_id, context)
             game.invite_keyboard_hidden = True
         await query.edit_message_text("Тестовая игра создана")
         await maybe_show_base_options(chat_id, thread_id, context, game)
@@ -593,13 +600,7 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             if code:
                 JOIN_CODES.pop(code, None)
             if not game.invite_keyboard_hidden:
-                await send_game_message(
-                    chat_id,
-                    thread_id,
-                    context,
-                    "Клавиатура приглашений скрыта.",
-                    reply_markup=ReplyKeyboardRemove(),
-                )
+                await hide_invite_keyboard(chat_id, thread_id, context)
                 game.invite_keyboard_hidden = True
             await query.edit_message_text("Длительность установлена")
             await maybe_show_base_options(chat_id, thread_id, context, game)

@@ -44,6 +44,7 @@ from telegram import (
     Message,
     Update,
 )
+from telegram.error import TelegramError
 from telegram.ext import (
     Application,
     ApplicationHandlerStop,
@@ -312,6 +313,9 @@ def schedule_refresh_base_letters(
     asyncio.create_task(refresh_base_letters_button(chat_id, thread_id, context))
 
 
+INVISIBLE_MESSAGE = "\u2063"
+
+
 async def send_game_message(
     chat_id: int,
     thread_id: Optional[int],
@@ -331,6 +335,29 @@ async def send_game_message(
     if refresh:
         schedule_refresh_base_letters(chat_id, thread_id or 0, context)
     return msg
+
+
+async def hide_invite_keyboard(
+    chat_id: int,
+    thread_id: Optional[int],
+    context: CallbackContext,
+    *,
+    refresh: bool = True,
+) -> None:
+    """Remove the invite keyboard without leaving a visible message."""
+
+    msg = await send_game_message(
+        chat_id,
+        thread_id,
+        context,
+        INVISIBLE_MESSAGE,
+        refresh=refresh,
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    try:
+        await msg.delete()
+    except TelegramError:
+        logger.debug("Failed to delete invite keyboard removal message", exc_info=True)
 
 
 async def reply_game_message(
@@ -727,13 +754,7 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         game.players[0] = Player(user_id=0, name="Бот")
         game.status = "waiting"
         if not game.invite_keyboard_hidden:
-            await send_game_message(
-                chat.id,
-                thread_id,
-                context,
-                "Клавиатура приглашений скрыта.",
-                reply_markup=ReplyKeyboardRemove(),
-            )
+            await hide_invite_keyboard(chat.id, thread_id, context)
             game.invite_keyboard_hidden = True
         await query.edit_message_text("Тестовая игра: выберите режим букв")
     elif query.data.startswith("greb_time_"):
@@ -763,13 +784,7 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             )
             game.invite_keyboard_hidden = False
         if not game.invite_keyboard_hidden:
-            await send_game_message(
-                chat.id,
-                thread_id,
-                context,
-                "Клавиатура приглашений скрыта.",
-                reply_markup=ReplyKeyboardRemove(),
-            )
+            await hide_invite_keyboard(chat.id, thread_id, context)
             game.invite_keyboard_hidden = True
 
     await prompt_letters_selection(game, context)
@@ -782,13 +797,7 @@ async def prompt_letters_selection(game: GameState, context: CallbackContext) ->
     if not chat_id:
         return
     if not game.invite_keyboard_hidden:
-        await send_game_message(
-            chat_id,
-            None,
-            context,
-            "Клавиатура приглашений скрыта.",
-            reply_markup=ReplyKeyboardRemove(),
-        )
+        await hide_invite_keyboard(chat_id, None, context)
         game.invite_keyboard_hidden = True
     keyboard = InlineKeyboardMarkup(
         [
