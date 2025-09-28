@@ -1075,22 +1075,27 @@ def build_grebeshok_stats_message(game: GameState) -> str:
     history = _grebeshok_history(game)
     base_letters = tuple(ch.lower().replace("ё", "е") for ch in game.base_letters)
 
-    longest: Optional[Tuple[int, int, Player, str]] = None
+    longest_length: int = 0
+    longest_entries: List[Tuple[int, Player, str]] = []
     richest_base: Dict[int, Tuple[int, int, str]] = {}
     max_base_count = 0
-    rarest: Optional[Tuple[float, int, Player, str]] = None
+    rarest_zipf: Optional[float] = None
+    rarest_entries: List[Tuple[int, Player, str]] = []
 
     for index, (player_id, word) in enumerate(history):
         player = game.players.get(player_id)
         if not player:
             continue
         length = len(word)
-        if length and (
-            longest is None
-            or length > longest[0]
-            or (length == longest[0] and index < longest[1])
-        ):
-            longest = (length, index, player, word)
+        if length:
+            if length > longest_length:
+                longest_length = length
+                longest_entries = [(index, player, word)]
+            elif length == longest_length and not any(
+                entry_player.user_id == player.user_id
+                for _, entry_player, _ in longest_entries
+            ):
+                longest_entries.append((index, player, word))
 
         base_count = sum(1 for ch in word.replace("ё", "е") if ch in base_letters)
         if base_count:
@@ -1105,22 +1110,24 @@ def build_grebeshok_stats_message(game: GameState) -> str:
         zipf = get_zipf(word)
         if zipf is None:
             continue
-        if (
-            rarest is None
-            or zipf < rarest[0]
-            or (zipf == rarest[0] and index < rarest[1])
+        if rarest_zipf is None or zipf < rarest_zipf:
+            rarest_zipf = zipf
+            rarest_entries = [(index, player, word)]
+        elif zipf == rarest_zipf and not any(
+            entry_player.user_id == player.user_id
+            for _, entry_player, _ in rarest_entries
         ):
-            rarest = (zipf, index, player, word)
+            rarest_entries.append((index, player, word))
 
     lines = ["<b>Интересная статистика</b>", ""]
 
     lines.append("🏅 <b>Самое длинное слово</b>")
-    if longest:
-        length, _, player, word = longest
-        lines.append(
-            f"• {html.escape(word)} — {html.escape(format_player_name(player))}"
-            f" ({length} букв)"
-        )
+    if longest_entries:
+        for _, player, word in sorted(longest_entries, key=lambda item: item[0]):
+            lines.append(
+                f"• {html.escape(word)} — {html.escape(format_player_name(player))}"
+                f" ({longest_length} букв)"
+            )
     else:
         lines.append("Нет данных о самых длинных словах.")
     lines.append("")
@@ -1149,11 +1156,11 @@ def build_grebeshok_stats_message(game: GameState) -> str:
     lines.append("")
 
     lines.append("🏅 <b>Самое редкое слово</b>")
-    if rarest:
-        zipf, _, player, word = rarest
-        lines.append(
-            f"• {html.escape(word)} — {html.escape(format_player_name(player))}"
-        )
+    if rarest_entries:
+        for _, player, word in sorted(rarest_entries, key=lambda item: item[0]):
+            lines.append(
+                f"• {html.escape(word)} — {html.escape(format_player_name(player))}"
+            )
     else:
         lines.append("Нет данных о редкости слов.")
 
