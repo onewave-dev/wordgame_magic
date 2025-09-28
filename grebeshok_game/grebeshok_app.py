@@ -1020,12 +1020,19 @@ async def start_round(game: GameState, context: CallbackContext) -> None:
     game.word_history.clear()
     game.status = "running"
     gid = game_key_from_state(game)
-    warn_time = max(game.time_limit * 60 - 60, 0)
-    game.jobs["warn"] = context.job_queue.run_once(one_minute_warning, warn_time, data=gid)
+    warn_time = game.time_limit * 60 - 60
+    if warn_time > 0:
+        game.jobs["warn"] = context.job_queue.run_once(
+            one_minute_warning, warn_time, data=gid
+        )
+        start_message = "Игра началась!"
+    else:
+        game.jobs.pop("warn", None)
+        start_message = "Игра началась!\nОсталась 1 минута!"
     game.jobs["end"] = context.job_queue.run_once(end_game_job, game.time_limit * 60, data=gid)
     if 0 in game.players:  # dummy bot
         game.jobs["dummy"] = context.job_queue.run_repeating(dummy_bot_word, 30, data=gid)
-    await broadcast(game, "Игра началась!", context, refresh=False)
+    await broadcast(game, start_message, context, refresh=False)
     await broadcast(
         game,
         "<b>Новая функция</b>: в игре можно отправлять знак ? и слово, чтобы проверить определение любого слова у ИИ.",
