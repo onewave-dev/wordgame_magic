@@ -1112,7 +1112,7 @@ def build_grebeshok_stats_message(game: GameState) -> str:
         ):
             rarest = (zipf, index, player, word)
 
-    lines = ["✨ <b>Интересная статистика</b>", ""]
+    lines = ["<b>Интересная статистика</b>", ""]
 
     lines.append("🏅 <b>Самое длинное слово</b>")
     if longest:
