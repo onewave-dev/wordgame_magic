@@ -1502,6 +1502,13 @@ async def handle_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     accepted: list[str] = []
     rejected: list[str] = []
     for word in words:
+        if game.status != "running":
+            logger.debug(
+                "Game %s status switched to %s, skipping remaining words",
+                gid,
+                game.status,
+            )
+            break
         if not re.fullmatch(r"[а-я]+", word):
             rejected.append(f"{word} (недопустимые символы)")
             continue
