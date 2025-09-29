@@ -315,6 +315,7 @@ TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 PUBLIC_URL = os.environ.get("PUBLIC_URL")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", secrets.token_hex())
 WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "/webhook")
+ALLOWED_UPDATES = ["message", "callback_query", "users_shared"]
 
 
 def mark_awaiting_name(context: CallbackContext, user_id: int) -> None:
@@ -1649,7 +1650,7 @@ async def webhook_check(context: CallbackContext) -> None:
                 await context.bot.set_webhook(
                     url=expected_url,
                     secret_token=WEBHOOK_SECRET,
-                    allowed_updates=[],
+                    allowed_updates=ALLOWED_UPDATES,
                 )
                 logger.info("Webhook registered: %s", expected_url)
             except Exception as e:
@@ -1760,7 +1761,7 @@ async def on_startup() -> None:
             await APPLICATION.bot.set_webhook(
                 url=webhook_url,
                 secret_token=WEBHOOK_SECRET,
-                allowed_updates=[],
+                allowed_updates=ALLOWED_UPDATES,
             )
 
 
@@ -1787,7 +1788,7 @@ async def set_webhook() -> JSONResponse:
     await APPLICATION.bot.set_webhook(
         url=webhook_url,
         secret_token=WEBHOOK_SECRET,
-        allowed_updates=[],
+        allowed_updates=ALLOWED_UPDATES,
     )
     return JSONResponse({"url": webhook_url})
 
@@ -1799,7 +1800,7 @@ async def reset_webhook() -> JSONResponse:
     await APPLICATION.bot.set_webhook(
         url=webhook_url,
         secret_token=WEBHOOK_SECRET,
-        allowed_updates=[],
+        allowed_updates=ALLOWED_UPDATES,
     )
     return JSONResponse({"reset_to": webhook_url})
 
