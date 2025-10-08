@@ -2,7 +2,7 @@ import os
 import logging
 from typing import Set, Optional
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Response
 from fastapi.responses import JSONResponse
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -175,6 +175,10 @@ async def root() -> JSONResponse:
 
 
 @app.get("/healthz")
-async def healthz() -> JSONResponse:
-    return JSONResponse({"status": "ok"})
+async def healthz_get():
+    return {"status": "ok"}
 
+@app.head("/healthz", include_in_schema=False)
+async def healthz_head():
+    # Для HEAD тело не нужно
+    return Response(status_code=200)
