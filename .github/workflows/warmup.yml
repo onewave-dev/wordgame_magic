@@ -1,0 +1,30 @@
+name: Keep Render Free Instance Warm (GET /healthz)
+
+on:
+  schedule:
+    # каждые 10 минут, смещено на 3-ю минуту, чтобы не совпадать с UptimeRobot
+    - cron: "3-59/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  warmup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping /healthz (robust GET)
+        run: |
+          set -e
+          BASE="https://wordgame-magic.onrender.com"
+          URL="${BASE}/healthz?ts=$(date +%s)"   # анти-кэш
+          echo "GET $URL"
+          # Пояснения ключей ниже:
+          curl -sS -4 \
+               --fail \
+               --connect-timeout 7 \
+               --max-time 20 \
+               --retry 5 \
+               --retry-delay 2 \
+               --retry-all-errors \
+               -H "User-Agent: GH-Actions Warmup" \
+               "$URL"
+          echo; echo "OK"
