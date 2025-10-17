@@ -2,3 +2,43 @@ yspellertest.py
 logs/
 *.log
 fix.patch
+admin/
+
+# === PYTHON ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+*.so
+
+# virtual environment
+.venv/
+venv/
+ENV/
+env/
+
+
+# compiled extensions
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# === ENV & SECRETS ===
+.env
+.env.*
+*.env
+*.secret
+*.key
+
+# === LOGS ===
+*.log
+logs/
+log/
+*.out
+*.err
+
+# === CACHE / TMP ===
+*.tmp
+*.bak*
