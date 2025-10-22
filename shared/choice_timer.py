@@ -31,7 +31,7 @@ class ChoiceTimerHandle:
         timer_messages: List[Tuple[int, Optional[int], int]],
         on_timeout: TimeoutCallback,
         timer_sequence: Sequence[str],
-        final_timer_text: str,
+        final_timer_text: Optional[str],
         timeout_timer_text: str,
         data: Optional[Dict[str, Any]] = None,
     ) -> None:
@@ -144,7 +144,7 @@ async def send_choice_with_timer(
     timer_message_kwargs: Optional[Dict[str, Any]] = None,
     timer_sequence: Sequence[str] = DEFAULT_TIMER_SEQUENCE,
     data: Optional[Dict[str, Any]] = None,
-    final_timer_text: str = "Выбор сделан",
+    final_timer_text: Optional[str] = None,
     timeout_timer_text: str = "Случайный выбор",
 ) -> ChoiceTimerHandle:
     """Broadcast a choice message with a countdown timer.

@@ -970,6 +970,7 @@ async def base_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             send_func=send_game_message,
             on_timeout=auto_pick,
             data={"chat_id": chat_id, "thread_id": thread_id, "words": words},
+            final_timer_text=None,
             timeout_timer_text="Случайный выбор",
         )
         game.jobs["base_choice"] = handle
