@@ -1681,7 +1681,7 @@ def register_handlers(application: Application, include_start: bool = False) -> 
         MessageHandler(
             filters.TEXT & (~filters.COMMAND) & AWAITING_COMPOSE_NAME_FILTER,
             handle_name,
-            block=True,
+            block=False,
         ),
         group=-1,
     )

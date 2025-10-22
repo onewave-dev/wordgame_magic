@@ -351,6 +351,26 @@ def test_compose_and_grebeshok_name_filters_isolated():
     asyncio.run(run(False))
 
 
+def test_handle_name_handler_is_non_blocking():
+    async def run():
+        original_application = app.APPLICATION
+        try:
+            application = Application.builder().token("123:ABC").build()
+            app.register_handlers(application)
+            handlers = application.handlers.get(-1, [])
+            name_handlers = [
+                handler
+                for handler in handlers
+                if getattr(handler.callback, "__name__", "") == "handle_name"
+            ]
+            assert name_handlers, "handle_name handler not registered"
+            assert name_handlers[0].block is False
+        finally:
+            app.APPLICATION = original_application
+
+    asyncio.run(run())
+
+
 def test_choose_grebeshok_then_set_name_replies_with_confirmation():
     async def run():
         compose_active = app.ACTIVE_GAMES.copy()
