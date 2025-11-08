@@ -351,6 +351,183 @@ def test_compose_and_grebeshok_name_filters_isolated():
     asyncio.run(run(False))
 
 
+def test_grebeshok_invite_flow_from_newgame():
+    async def run():
+        old_active = greb_app.ACTIVE_GAMES.copy()
+        old_join = greb_app.JOIN_CODES.copy()
+        old_chat_games = greb_app.CHAT_GAMES.copy()
+        old_awaiting = greb_app.AWAITING_GREBESHOK_NAME_USERS.copy()
+        try:
+            greb_app.ACTIVE_GAMES.clear()
+            greb_app.JOIN_CODES.clear()
+            greb_app.CHAT_GAMES.clear()
+            greb_app.AWAITING_GREBESHOK_NAME_USERS.clear()
+
+            host_id = 9001
+            chat_id = 9101
+            start_message = DummyMessage(chat_id, host_id, text="/start")
+            update = SimpleNamespace(
+                effective_user=SimpleNamespace(id=host_id),
+                effective_chat=start_message.chat,
+                effective_message=start_message,
+                message=start_message,
+            )
+            bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace()))
+            application_ns = SimpleNamespace(user_data={})
+            context = SimpleNamespace(
+                args=[],
+                user_data={},
+                application=application_ns,
+                bot=bot,
+            )
+
+            with patch.object(greb_app, "schedule_refresh_base_letters", lambda *a, **k: None):
+                await greb_app.newgame(update, context)
+
+                gid = greb_app.game_key(chat_id, None)
+                assert gid in greb_app.ACTIVE_GAMES
+                first_code = context.user_data.get("invite_code")
+                assert first_code in greb_app.JOIN_CODES
+                assert greb_app.JOIN_CODES[first_code] == gid
+
+                start_message.text = "Ведущий"
+                try:
+                    await greb_app.handle_name(update, context)
+                except ApplicationHandlerStop:
+                    pass
+
+                invite_keyboard_msg = DummyMessage(chat_id, host_id)
+                time_query = DummyCallbackQuery("greb_time_3", invite_keyboard_msg, host_id)
+                await greb_app.time_selected(
+                    SimpleNamespace(callback_query=time_query),
+                    context,
+                )
+
+                assert any(
+                    "Игра создана. Пригласите участников" in text
+                    for text, _ in time_query.edited_texts
+                )
+                assert any(
+                    "Выберите способ приглашения" in text
+                    for text, _ in invite_keyboard_msg.replies
+                )
+
+                invite_message = DummyMessage(chat_id, host_id, text="Создать ссылку")
+                invite_update = SimpleNamespace(
+                    message=invite_message,
+                    effective_message=invite_message,
+                    effective_chat=invite_message.chat,
+                    effective_user=SimpleNamespace(id=host_id),
+                )
+                await greb_app.invite_link(invite_update, context)
+
+                assert any("https://t.me" in text for text, _ in invite_message.replies)
+                assert context.user_data.get("invite_code") == first_code
+        finally:
+            greb_app.ACTIVE_GAMES.clear()
+            greb_app.ACTIVE_GAMES.update(old_active)
+            greb_app.JOIN_CODES.clear()
+            greb_app.JOIN_CODES.update(old_join)
+            greb_app.CHAT_GAMES.clear()
+            greb_app.CHAT_GAMES.update(old_chat_games)
+            greb_app.AWAITING_GREBESHOK_NAME_USERS.clear()
+            greb_app.AWAITING_GREBESHOK_NAME_USERS.update(old_awaiting)
+
+    asyncio.run(run())
+
+
+def test_grebeshok_invite_flow_after_restart():
+    async def run():
+        old_active = greb_app.ACTIVE_GAMES.copy()
+        old_finished = greb_app.FINISHED_GAMES.copy()
+        old_join = greb_app.JOIN_CODES.copy()
+        old_chat_games = greb_app.CHAT_GAMES.copy()
+        try:
+            greb_app.ACTIVE_GAMES.clear()
+            greb_app.FINISHED_GAMES.clear()
+            greb_app.JOIN_CODES.clear()
+            greb_app.CHAT_GAMES.clear()
+
+            host_id = 9102
+            guest_id = 9103
+            host_chat = 9202
+            guest_chat = 9203
+            game = greb_app.GameState(host_id=host_id)
+            game.time_limit = 3
+            game.base_letters = ("к", "о", "т")
+            game.players = {
+                host_id: greb_app.Player(user_id=host_id, name="Хост"),
+                guest_id: greb_app.Player(user_id=guest_id, name="Гость"),
+            }
+            game.player_chats = {host_id: host_chat, guest_id: guest_chat}
+            gid = greb_app.game_key(host_chat, None)
+            greb_app.ACTIVE_GAMES[gid] = game
+
+            with (
+                patch.object(greb_app, "schedule_refresh_base_letters", lambda *a, **k: None),
+                patch.object(greb_app, "broadcast", new=AsyncMock()),
+            ):
+                await greb_app.finish_game(
+                    game,
+                    SimpleNamespace(bot=SimpleNamespace(send_message=AsyncMock())),
+                    "Время вышло",
+                )
+
+            assert gid not in greb_app.ACTIVE_GAMES
+            assert gid in greb_app.FINISHED_GAMES
+
+            restart_message = DummyMessage(host_chat, host_id)
+            restart_query = DummyCallbackQuery(f"restart_{host_chat}_0", restart_message, host_id)
+            send_message_ns = SimpleNamespace(delete=AsyncMock())
+            context = SimpleNamespace(
+                user_data={},
+                bot=SimpleNamespace(send_message=AsyncMock(return_value=send_message_ns)),
+            )
+
+            with (
+                patch.object(greb_app, "schedule_refresh_base_letters", lambda *a, **k: None),
+                patch.object(greb_app, "broadcast", new=AsyncMock()),
+                patch.object(greb_app, "send_game_message", new=AsyncMock(return_value=send_message_ns)),
+            ):
+                await greb_app.restart_game(SimpleNamespace(callback_query=restart_query), context)
+
+            new_gid = greb_app.game_key(host_chat, None)
+            assert new_gid in greb_app.ACTIVE_GAMES
+            new_game = greb_app.ACTIVE_GAMES[new_gid]
+            assert guest_id in new_game.players
+
+            time_message = DummyMessage(host_chat, host_id)
+            time_query = DummyCallbackQuery("greb_time_5", time_message, host_id)
+            with (
+                patch.object(greb_app, "schedule_refresh_base_letters", lambda *a, **k: None),
+                patch.object(greb_app, "send_game_message", new=AsyncMock(return_value=send_message_ns)),
+            ):
+                await greb_app.time_selected(SimpleNamespace(callback_query=time_query), context)
+
+            invite_message = DummyMessage(host_chat, host_id, text="Создать ссылку")
+            invite_update = SimpleNamespace(
+                message=invite_message,
+                effective_message=invite_message,
+                effective_chat=invite_message.chat,
+                effective_user=SimpleNamespace(id=host_id),
+            )
+            await greb_app.invite_link(invite_update, context)
+
+            assert any("https://t.me" in text for text, _ in invite_message.replies)
+            assert context.user_data.get("invite_code") in greb_app.JOIN_CODES
+        finally:
+            greb_app.ACTIVE_GAMES.clear()
+            greb_app.ACTIVE_GAMES.update(old_active)
+            greb_app.FINISHED_GAMES.clear()
+            greb_app.FINISHED_GAMES.update(old_finished)
+            greb_app.JOIN_CODES.clear()
+            greb_app.JOIN_CODES.update(old_join)
+            greb_app.CHAT_GAMES.clear()
+            greb_app.CHAT_GAMES.update(old_chat_games)
+
+    asyncio.run(run())
+
+
 def test_handle_name_handler_is_non_blocking():
     async def run():
         original_application = app.APPLICATION
