@@ -1351,7 +1351,7 @@ async def question_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     llm_text = await describe_word(word)
     response_text = (
         f"<b>{html.escape(player_name)}</b> запросил: <b>{html.escape(display_word)}</b>\n\n"
-        f"<b>{html.escape(word)}</b> {prefix}\n\n{llm_text}"
+        f"<b>{html.escape(word)}</b> {prefix}\n\n{html.escape(llm_text)}"
     )
     delivered = False
     if game:

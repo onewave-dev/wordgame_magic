@@ -351,6 +351,47 @@ def test_compose_and_grebeshok_name_filters_isolated():
     asyncio.run(run(False))
 
 
+def test_question_word_escapes_llm_text():
+    async def run():
+        old_chat_games = app.CHAT_GAMES.copy()
+        try:
+            app.CHAT_GAMES.clear()
+
+            user_id = 303
+            chat_id = 404
+            message = DummyMessage(chat_id, user_id, text="?Кот&dog")
+            message.from_user.full_name = "Игрок <&>"
+            update = SimpleNamespace(message=message)
+            context = SimpleNamespace(bot=None)
+
+            llm_text = '<b>"опасно"&</b>'
+
+            with patch.object(app, "DICT", set()), patch.object(
+                app,
+                "describe_word",
+                AsyncMock(return_value=llm_text),
+            ), patch.object(app, "reply_game_message", AsyncMock()) as mock_reply, patch.object(
+                app, "send_game_message", AsyncMock()
+            ):
+                try:
+                    await app.question_word(update, context)
+                except ApplicationHandlerStop:
+                    pass
+
+            assert mock_reply.await_count == 1
+            call = mock_reply.await_args
+            response_text = call.args[2]
+            assert call.kwargs.get("parse_mode") == "HTML"
+            assert "&lt;b&gt;&quot;опасно&quot;&amp;&lt;/b&gt;" in response_text
+            assert "<b>Игрок &lt;&amp;&gt;</b>" in response_text
+            assert "<b>Кот&amp;dog</b>" in response_text
+        finally:
+            app.CHAT_GAMES.clear()
+            app.CHAT_GAMES.update(old_chat_games)
+
+    asyncio.run(run())
+
+
 def test_base_random_handles_insufficient_candidates():
     async def run():
         old_active_games = app.ACTIVE_GAMES.copy()
