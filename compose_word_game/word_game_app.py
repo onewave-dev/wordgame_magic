@@ -1349,9 +1349,10 @@ async def question_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     in_dict = word in DICT
     prefix = "Есть такое слово в словаре." if in_dict else "Этого слова нет в словаре игры"
     llm_text = await describe_word(word)
+    escaped_llm_text = html.escape(llm_text or "")
     response_text = (
         f"<b>{html.escape(player_name)}</b> запросил: <b>{html.escape(display_word)}</b>\n\n"
-        f"<b>{html.escape(word)}</b> {prefix}\n\n{html.escape(llm_text)}"
+        f"<b>{html.escape(word)}</b> {prefix}\n\n{escaped_llm_text}"
     )
     delivered = False
     if game:
