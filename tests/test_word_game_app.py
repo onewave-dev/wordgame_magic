@@ -1,4 +1,5 @@
 import asyncio
+import html
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -388,6 +389,38 @@ def test_question_word_escapes_llm_text():
         finally:
             app.CHAT_GAMES.clear()
             app.CHAT_GAMES.update(old_chat_games)
+
+    asyncio.run(run())
+
+
+def test_question_word_escapes_llm_response_html():
+    async def run():
+        message = DummyMessage(chat_id=404, user_id=404, text="?Тест")
+        message.from_user.full_name = "Игрок <Тест>"
+        update = SimpleNamespace(message=message)
+        context = SimpleNamespace(bot=SimpleNamespace())
+
+        llm_text = "<описание> & \"кавычки\""
+        normalized_word = app.normalize_word("Тест")
+        expected_text = (
+            f"<b>{html.escape(message.from_user.full_name)}</b> запросил: "
+            f"<b>{html.escape('Тест')}</b>\n\n"
+            f"<b>{html.escape(normalized_word)}</b> Этого слова нет в словаре игры\n\n"
+            f"{html.escape(llm_text)}"
+        )
+
+        with patch.object(app, "describe_word", AsyncMock(return_value=llm_text)):
+            with patch.object(app, "schedule_refresh_base_button", lambda *a, **kw: None):
+                with patch.object(app, "DICT", set()):
+                    try:
+                        await app.question_word(update, context)
+                    except ApplicationHandlerStop:
+                        pass
+
+        assert len(message.replies) == 1
+        reply_text, kwargs = message.replies[0]
+        assert reply_text == expected_text
+        assert kwargs.get("parse_mode") == "HTML"
 
     asyncio.run(run())
 
