@@ -934,6 +934,14 @@ async def base_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             candidates = [w for w in candidates if len(w) >= 10]
         if len(game.players) >= 3:
             candidates = [w for w in candidates if len(w) >= 9]
+        if len(candidates) < 3:
+            await reply_game_message(
+                query.message,
+                context,
+                "Не удалось найти достаточно подходящих слов для случайного выбора. "
+                "Попробуйте выбрать базовое слово вручную.",
+            )
+            return
         words = random.sample(candidates, 3)
         buttons = [[InlineKeyboardButton(w, callback_data=f"pick_{w}")] for w in words]
         markup = InlineKeyboardMarkup(buttons)

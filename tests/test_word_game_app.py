@@ -351,6 +351,62 @@ def test_compose_and_grebeshok_name_filters_isolated():
     asyncio.run(run(False))
 
 
+def test_base_random_handles_insufficient_candidates():
+    async def run():
+        old_active_games = app.ACTIVE_GAMES.copy()
+        old_join_codes = app.JOIN_CODES.copy()
+        old_base_msg_ids = app.BASE_MSG_IDS.copy()
+        old_last_refresh = app.LAST_REFRESH.copy()
+        old_chat_games = app.CHAT_GAMES.copy()
+        old_dict = set(app.DICT)
+        try:
+            app.ACTIVE_GAMES.clear()
+            app.JOIN_CODES.clear()
+            app.BASE_MSG_IDS.clear()
+            app.LAST_REFRESH.clear()
+            app.CHAT_GAMES.clear()
+            app.DICT.clear()
+
+            host_id = 303
+            chat_id = 303
+            game_id = "gid"
+            game = app.GameState(host_id=host_id, game_id=game_id)
+            game.players[host_id] = app.Player(user_id=host_id, name="Ведущий")
+            game.player_chats[host_id] = chat_id
+            app.ACTIVE_GAMES[game_id] = game
+            app.CHAT_GAMES[(chat_id, 0)] = game_id
+
+            message = DummyMessage(chat_id, host_id)
+            query = DummyCallbackQuery("base_random", message, host_id)
+            update = SimpleNamespace(callback_query=query)
+            context = SimpleNamespace(bot=None)
+
+            with patch.object(app, "schedule_refresh_base_button", lambda *a, **kw: None):
+                with patch(
+                    "compose_word_game.word_game_app.random.sample",
+                    side_effect=AssertionError("random.sample should not be called"),
+                ):
+                    await app.base_choice(update, context)
+
+            assert message.replies, "Expected an informative reply"
+            assert "Не удалось найти достаточно подходящих слов" in message.replies[0][0]
+        finally:
+            app.DICT.clear()
+            app.DICT.update(old_dict)
+            app.ACTIVE_GAMES.clear()
+            app.ACTIVE_GAMES.update(old_active_games)
+            app.JOIN_CODES.clear()
+            app.JOIN_CODES.update(old_join_codes)
+            app.BASE_MSG_IDS.clear()
+            app.BASE_MSG_IDS.update(old_base_msg_ids)
+            app.LAST_REFRESH.clear()
+            app.LAST_REFRESH.update(old_last_refresh)
+            app.CHAT_GAMES.clear()
+            app.CHAT_GAMES.update(old_chat_games)
+
+    asyncio.run(run())
+
+
 def test_grebeshok_invite_flow_from_newgame():
     async def run():
         old_active = greb_app.ACTIVE_GAMES.copy()
