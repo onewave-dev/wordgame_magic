@@ -765,13 +765,28 @@ async def users_shared_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
     for u in shared.users:
         user_label = format_shared_user(u)
+        user_id = getattr(u, "user_id", None)
+        if not user_id:
+            reason = (
+                "Telegram не передал ID пользователя — он ещё не открывал этого бота."
+            )
+            logger.warning(
+                "Cannot deliver invite to %s: %s", user_label, reason
+            )
+            permanent_failures.append((user_label, reason))
+            continue
         try:
-            await context.bot.send_message(u.user_id, f"Приглашение в игру: {link}")
-            game.invited_users.add(u.user_id)
+            await context.bot.send_message(user_id, f"Приглашение в игру: {link}")
+            game.invited_users.add(user_id)
             delivered.append(user_label)
         except (Forbidden, BadRequest) as exc:
             logger.warning("Failed to deliver invite to %s: %s", user_label, exc)
-            permanent_failures.append((user_label, str(exc)))
+            reason = str(exc)
+            if isinstance(exc, Forbidden) and "initiate conversation" in reason:
+                reason = (
+                    "Telegram запрещает боту писать первым. Попросите игрока открыть бота по ссылке."
+                )
+            permanent_failures.append((user_label, reason))
         except TelegramError as exc:
             logger.warning("Temporary error delivering invite to %s: %s", user_label, exc)
             transient_failures.append((user_label, str(exc)))
@@ -801,7 +816,7 @@ async def users_shared_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     if not response_lines:
         response_lines.append("❌ Не удалось отправить приглашения. Попробуйте поделиться ссылкой вручную: " + link)
 
-    await reply_game_message(message, context, "\n".join(response_lines))
+    await send_game_message(chat_id, thread_id, context, "\n".join(response_lines))
 
 async def chat_id_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
