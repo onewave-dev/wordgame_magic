@@ -1,6 +1,8 @@
-import os
 import logging
-from typing import Set, Optional
+import os
+import socket
+from typing import Optional, Set
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Request, HTTPException, Response
 from fastapi.responses import JSONResponse
@@ -11,6 +13,7 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
 )
+from telegram.error import TelegramError
 
 import compose_word_game.word_game_app as compose_game
 import grebeshok_game.grebeshok_app as grebeshok_game
@@ -108,6 +111,25 @@ async def quit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await message.reply_text("Игра не запущена")
 
 
+def _can_resolve_webhook_host(webhook_url: str) -> bool:
+    parsed = urlparse(webhook_url)
+    host = parsed.hostname
+    if not host:
+        logger.error("Webhook URL %s does not contain a hostname", webhook_url)
+        return False
+    try:
+        socket.getaddrinfo(host, None)
+    except socket.gaierror as exc:
+        logger.warning(
+            "Skipping webhook registration for %s: failed to resolve host %s (%s)",
+            webhook_url,
+            host,
+            exc,
+        )
+        return False
+    return True
+
+
 @app.on_event("startup")
 async def on_startup() -> None:
     global APPLICATION
@@ -122,13 +144,29 @@ async def on_startup() -> None:
     await APPLICATION.start()
     if PUBLIC_URL:
         webhook_url = f"{PUBLIC_URL.rstrip('/')}{WEBHOOK_PATH}"
-        info = await APPLICATION.bot.get_webhook_info()
-        if info.url != webhook_url:
-            await APPLICATION.bot.set_webhook(
-                url=webhook_url,
-                secret_token=WEBHOOK_SECRET,
-                allowed_updates=["message", "callback_query", "chat_member", "users_shared"],
-            )
+        if _can_resolve_webhook_host(webhook_url):
+            try:
+                info = await APPLICATION.bot.get_webhook_info()
+                webhook_is_different = info.url != webhook_url
+            except TelegramError as exc:
+                logger.warning("Failed to fetch current webhook info: %s", exc)
+                webhook_is_different = True
+            if webhook_is_different:
+                try:
+                    await APPLICATION.bot.set_webhook(
+                        url=webhook_url,
+                        secret_token=WEBHOOK_SECRET,
+                        allowed_updates=[
+                            "message",
+                            "callback_query",
+                            "chat_member",
+                            "users_shared",
+                        ],
+                    )
+                except TelegramError as exc:
+                    logger.error("Failed to set webhook to %s: %s", webhook_url, exc)
+        else:
+            logger.warning("Telegram webhook will not be configured without a resolvable host")
 
 
 @app.on_event("shutdown")
@@ -148,24 +186,38 @@ async def telegram_webhook(request: Request) -> JSONResponse:
 
 @app.get("/set_webhook")
 async def set_webhook() -> JSONResponse:
+    if not PUBLIC_URL:
+        raise HTTPException(status_code=400, detail="PUBLIC_URL is not configured")
     webhook_url = f"{PUBLIC_URL.rstrip('/')}{WEBHOOK_PATH}"
-    await APPLICATION.bot.set_webhook(
-        url=webhook_url,
-        secret_token=WEBHOOK_SECRET,
-        allowed_updates=["message", "callback_query", "chat_member", "users_shared"],
-    )
+    if not _can_resolve_webhook_host(webhook_url):
+        raise HTTPException(status_code=503, detail="Webhook host cannot be resolved")
+    try:
+        await APPLICATION.bot.set_webhook(
+            url=webhook_url,
+            secret_token=WEBHOOK_SECRET,
+            allowed_updates=["message", "callback_query", "chat_member", "users_shared"],
+        )
+    except TelegramError as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to set webhook: {exc}") from exc
     return JSONResponse({"url": webhook_url})
 
 
 @app.get("/reset_webhook")
 async def reset_webhook() -> JSONResponse:
+    if not PUBLIC_URL:
+        raise HTTPException(status_code=400, detail="PUBLIC_URL is not configured")
     webhook_url = f"{PUBLIC_URL.rstrip('/')}{WEBHOOK_PATH}"
-    await APPLICATION.bot.delete_webhook(drop_pending_updates=False)
-    await APPLICATION.bot.set_webhook(
-        url=webhook_url,
-        secret_token=WEBHOOK_SECRET,
-        allowed_updates=["message", "callback_query", "chat_member", "users_shared"],
-    )
+    if not _can_resolve_webhook_host(webhook_url):
+        raise HTTPException(status_code=503, detail="Webhook host cannot be resolved")
+    try:
+        await APPLICATION.bot.delete_webhook(drop_pending_updates=False)
+        await APPLICATION.bot.set_webhook(
+            url=webhook_url,
+            secret_token=WEBHOOK_SECRET,
+            allowed_updates=["message", "callback_query", "chat_member", "users_shared"],
+        )
+    except TelegramError as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to reset webhook: {exc}") from exc
     return JSONResponse({"reset_to": webhook_url})
 
 
