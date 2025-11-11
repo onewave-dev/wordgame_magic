@@ -40,6 +40,7 @@ from telegram.ext import (
 from telegram.error import BadRequest, Forbidden, TelegramError
 from llm_utils import describe_word
 from shared.choice_timer import ChoiceTimerHandle, send_choice_with_timer
+from shared.logging_utils import configure_logging
 from shared.word_stats import get_zipf
 
 # --- Utilities --------------------------------------------------------------
@@ -49,7 +50,10 @@ DICT_PATH = BASE_DIR / "nouns_ru_pymorphy2_yaspeller.jsonl"
 WHITELIST_PATH = BASE_DIR / "whitelist.jsonl"
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(level=LOG_LEVEL)
+TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", secrets.token_hex())
+
+configure_logging(level=LOG_LEVEL, extra_values=[TOKEN, WEBHOOK_SECRET])
 logger = logging.getLogger(__name__)
 
 def normalize_word(word: str) -> str:
@@ -311,9 +315,7 @@ APPLICATION: Optional[Application] = None
 BOT_USERNAME: Optional[str] = None
 
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
-TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 PUBLIC_URL = os.environ.get("PUBLIC_URL")
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", secrets.token_hex())
 WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "/webhook")
 ALLOWED_UPDATES = ["message", "callback_query", "users_shared"]
 
