@@ -1458,7 +1458,7 @@ async def question_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     llm_text = await describe_word(word)
     text = f"<b>{word}</b> {prefix}"
     if llm_text:
-        text = f"{text}\n\n{llm_text}"
+        text = f"{text}\n\n{html.escape(llm_text)}"
     await reply_game_message(
         message,
         context,
