@@ -59,6 +59,7 @@ from telegram.ext import (
 
 from llm_utils import describe_word
 from shared.choice_timer import ChoiceTimerHandle, send_choice_with_timer
+from shared.logging_utils import configure_logging
 from shared.word_stats import get_zipf
 
 
@@ -71,7 +72,9 @@ MESSAGE_RATE_LIMIT = float(os.environ.get("MESSAGE_RATE_LIMIT", "1"))
 ALLOWED_UPDATES = ["message", "callback_query", "users_shared"]
 
 
-logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
+configure_logging(level=LOG_LEVEL, extra_values=[TOKEN, WEBHOOK_SECRET])
 logger = logging.getLogger(__name__)
 
 

@@ -18,13 +18,15 @@ from telegram.error import TelegramError
 import compose_word_game.word_game_app as compose_game
 import grebeshok_game.grebeshok_app as grebeshok_game
 
+from shared.logging_utils import configure_logging
+
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 PUBLIC_URL = os.environ.get("PUBLIC_URL")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "/webhook")
 
-logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
+configure_logging(extra_values=[TOKEN, WEBHOOK_SECRET])
 logger = logging.getLogger(__name__)
 
 app = FastAPI()

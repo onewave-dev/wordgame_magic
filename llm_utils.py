@@ -9,8 +9,10 @@ from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 
+from shared.logging_utils import configure_logging
 from wiktionary_utils import lookup_wiktionary_meaning
 
+configure_logging(extra_values=[os.environ.get("OPENAI_API_KEY")])
 logger = logging.getLogger(__name__)
 
 
