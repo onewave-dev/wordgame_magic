@@ -425,6 +425,32 @@ def test_question_word_escapes_llm_response_html():
     asyncio.run(run())
 
 
+def test_greb_question_word_escapes_llm_text():
+    async def run():
+        message = DummyMessage(chat_id=505, user_id=606, text="?Слово")
+        update = SimpleNamespace(message=message)
+        context = SimpleNamespace(bot=None)
+        llm_text = "<ответ & определение>"
+
+        with patch.object(
+            greb_app, "describe_word", AsyncMock(return_value=llm_text)
+        ), patch.object(
+            greb_app, "schedule_refresh_base_letters", lambda *a, **kw: None
+        ), patch.object(greb_app, "DICTIONARY", set()):
+            try:
+                await greb_app.question_word(update, context)
+            except ApplicationHandlerStop:
+                pass
+
+        assert len(message.replies) == 1
+        reply_text, kwargs = message.replies[0]
+        assert html.escape(llm_text) in reply_text
+        assert llm_text not in reply_text
+        assert kwargs.get("parse_mode") == "HTML"
+
+    asyncio.run(run())
+
+
 def test_base_random_handles_insufficient_candidates():
     async def run():
         old_active_games = app.ACTIVE_GAMES.copy()
