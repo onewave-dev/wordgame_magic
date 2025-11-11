@@ -1447,24 +1447,80 @@ async def question_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     text = message.text.strip()
     if not text.startswith("?"):
         return
-    word = text[1:].strip().split()[0].lower().replace("ё", "е")
+    raw_word = text[1:].strip()
+    if not raw_word:
+        return
+    display_word = raw_word or ""
+    word_token = raw_word.split()[0]
+    word = word_token.lower().replace("ё", "е")
     if not word:
         return
+
+    game = get_game(message.chat_id, message.message_thread_id)
+    player_name = ""
+    user = message.from_user
+    if game and user:
+        game.player_chats[user.id] = message.chat_id
+        player = game.players.get(user.id)
+        if player and player.name:
+            player_name = player.name
+    if not player_name and user:
+        player_name = (
+            user.full_name
+            or user.first_name
+            or user.username
+            or "Игрок"
+        )
+    if not player_name:
+        player_name = "Игрок"
+
     prefix = (
         "Есть такое слово в словаре."
         if word in DICTIONARY
         else "Этого слова нет в словаре игры"
     )
     llm_text = await describe_word(word)
-    text = f"<b>{word}</b> {prefix}"
-    if llm_text:
-        text = f"{text}\n\n{html.escape(llm_text)}"
-    await reply_game_message(
-        message,
-        context,
-        text,
-        parse_mode="HTML",
-    )
+    escaped_llm_text = html.escape(llm_text or "")
+    response_lines = [
+        (
+            f"<b>{html.escape(player_name)}</b> запросил: "
+            f"<b>{html.escape(display_word or word)}</b>"
+        ),
+        "",
+        f"<b>{html.escape(word)}</b> {prefix}",
+    ]
+    if escaped_llm_text:
+        response_lines.extend(["", escaped_llm_text])
+    response_text = "\n".join(response_lines)
+
+    delivered = False
+    if game:
+        sent_chats: Set[int] = set()
+        for chat_id in game.player_chats.values():
+            if chat_id in sent_chats:
+                continue
+            sent_chats.add(chat_id)
+            try:
+                await send_game_message(
+                    chat_id,
+                    None,
+                    context,
+                    response_text,
+                    parse_mode="HTML",
+                )
+                if chat_id == message.chat_id:
+                    delivered = True
+            except TelegramError:
+                logger.debug(
+                    "Failed to send question response to chat %s", chat_id
+                )
+    if not delivered:
+        await reply_game_message(
+            message,
+            context,
+            response_text,
+            parse_mode="HTML",
+        )
     raise ApplicationHandlerStop
 
 
