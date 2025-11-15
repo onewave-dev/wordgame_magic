@@ -532,7 +532,6 @@ async def _finalize_initial_letter(
     state.base_letter = letter
     state.sequence = letter
     STATE_MANAGER.save(state)
-    await update_board_image(state, context)
     if context.bot:
         await context.bot.send_message(
             state.chat_id,
@@ -543,4 +542,5 @@ async def _finalize_initial_letter(
             parse_mode="HTML",
             message_thread_id=state.thread_id,
         )
+    await update_board_image(state, context)
     await start_first_turn(state, context)
