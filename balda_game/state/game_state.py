@@ -41,12 +41,16 @@ class GameState:
     current_player: Optional[int] = None
     turn_direction: Optional[str] = None
     created_at: datetime = field(default_factory=datetime.utcnow)
+    thread_id: Optional[int] = None
     players: Dict[int, PlayerState] = field(default_factory=dict)
     player_order: List[int] = field(default_factory=list)
     eliminated_players: List[int] = field(default_factory=list)
     turns: List[TurnRecord] = field(default_factory=list)
     timer_job: Optional[object] = None
     has_started: bool = False
+    join_code: Optional[str] = None
+    lobby_message_id: Optional[int] = None
+    lobby_message_chat_id: Optional[int] = None
 
     def reset_timer(self) -> None:
         """Forget the currently scheduled timer job."""

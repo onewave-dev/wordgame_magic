@@ -24,11 +24,11 @@ class GameRegistry:
         self.chat_games = {}
         self.join_codes = {}
 
-    def allocate_game(self, host_id: int, chat_id: int) -> GameState:
+    def allocate_game(self, host_id: int, chat_id: int, thread_id: Optional[int] = None) -> GameState:
         game_id = token_urlsafe(8)
-        state = GameState(game_id=game_id, host_id=host_id, chat_id=chat_id)
+        state = GameState(game_id=game_id, host_id=host_id, chat_id=chat_id, thread_id=thread_id)
         self.active_games[game_id] = state
-        self.chat_games[(chat_id, 0)] = game_id
+        self.chat_games[(chat_id, thread_id or 0)] = game_id
         return state
 
     def get_game(self, chat_id: int, thread_id: Optional[int]) -> Optional[GameState]:
@@ -42,6 +42,9 @@ class GameRegistry:
             game_id = self.chat_games.pop(key)
             if game_id and game_id in self.active_games:
                 self.active_games.pop(game_id)
+                stale_codes = [code for code, gid in self.join_codes.items() if gid == game_id]
+                for code in stale_codes:
+                    self.join_codes.pop(code, None)
 
     def reset(self) -> None:
         self.active_games.clear()
@@ -58,10 +61,10 @@ def clear_chat_state(chat_id: int) -> None:
     REGISTRY.clear_chat(chat_id)
 
 
-def create_lobby(host_id: int, chat_id: int) -> GameState:
+def create_lobby(host_id: int, chat_id: int, thread_id: Optional[int] = None) -> GameState:
     """Create a new lobby bound to the chat and host."""
 
-    return REGISTRY.allocate_game(host_id, chat_id)
+    return REGISTRY.allocate_game(host_id, chat_id, thread_id)
 
 
 def get_game(chat_id: int, thread_id: Optional[int]) -> Optional[GameState]:

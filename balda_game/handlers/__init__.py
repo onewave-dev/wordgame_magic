@@ -1,5 +1,14 @@
 """Telegram handlers for the Balda game."""
 
-from .router import newgame, register_handlers, reset_for_chat, start_cmd
+from .lobby import help_cmd, join_cmd, newgame, score_cmd, start_cmd
+from .router import register_handlers, reset_for_chat
 
-__all__ = ["register_handlers", "start_cmd", "newgame", "reset_for_chat"]
+__all__ = [
+    "register_handlers",
+    "start_cmd",
+    "newgame",
+    "reset_for_chat",
+    "join_cmd",
+    "help_cmd",
+    "score_cmd",
+]
