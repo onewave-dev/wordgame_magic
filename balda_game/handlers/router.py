@@ -15,13 +15,17 @@ from telegram.ext import (
 
 from ..state.manager import STATE_MANAGER
 from .lobby import (
+    AWAITING_BALDA_LETTER_FILTER,
     AWAITING_BALDA_NAME_FILTER,
     awaiting_name_guard,
+    handle_letter_reply,
     handle_name_reply,
     help_cmd,
     invite_callback,
     join_cmd,
+    letter_choice_callback,
     newgame,
+    release_letter_request,
     release_name_request,
     score_cmd,
     start_button_callback,
@@ -34,6 +38,7 @@ async def reset_for_chat(chat_id: int, user_id: int, context: ContextTypes.DEFAU
 
     STATE_MANAGER.reset_chat(chat_id)
     release_name_request(context, user_id)
+    release_letter_request(user_id)
 
 
 def register_handlers(application: Optional[Application]) -> None:
@@ -50,6 +55,14 @@ def register_handlers(application: Optional[Application]) -> None:
     application.add_handler(MessageHandler(filters.COMMAND, awaiting_name_guard), group=-1)
     application.add_handler(
         MessageHandler(
+            filters.TEXT & (~filters.COMMAND) & AWAITING_BALDA_LETTER_FILTER,
+            handle_letter_reply,
+            block=False,
+        ),
+        group=-1,
+    )
+    application.add_handler(
+        MessageHandler(
             filters.TEXT & (~filters.COMMAND) & AWAITING_BALDA_NAME_FILTER,
             handle_name_reply,
             block=False,
@@ -58,3 +71,4 @@ def register_handlers(application: Optional[Application]) -> None:
     )
     application.add_handler(CallbackQueryHandler(invite_callback, pattern="^balda:invite:"))
     application.add_handler(CallbackQueryHandler(start_button_callback, pattern="^balda:start:"))
+    application.add_handler(CallbackQueryHandler(letter_choice_callback, pattern="^balda:letter:"))

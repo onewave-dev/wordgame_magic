@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import html
-from typing import List, Optional
+import random
+from typing import Dict, List, Optional
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, Update, User
+from telegram import ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, Message, Update, User
 from telegram.error import TelegramError
 from telegram.ext import ApplicationHandlerStop, ContextTypes, filters
 
+from ..rendering import BaldaRenderer
 from ..state import GameState, PlayerState
 from ..state.manager import STATE_MANAGER
 
@@ -37,6 +39,12 @@ HELP_TEXT = (
 )
 
 AWAITING_NAME_USERS: set[int] = set()
+AWAITING_LETTER_USERS: Dict[int, str] = {}
+RENDERER = BaldaRenderer()
+
+LETTER_EXCLUDED = {"ъ", "ё", "ы"}
+CYRILLIC_ALPHABET = tuple(chr(code) for code in range(ord("а"), ord("я") + 1)) + ("ё",)
+RANDOM_LETTERS = tuple(letter for letter in CYRILLIC_ALPHABET if letter not in LETTER_EXCLUDED)
 
 
 class AwaitingBaldaNameFilter(filters.MessageFilter):
@@ -50,6 +58,19 @@ class AwaitingBaldaNameFilter(filters.MessageFilter):
 
 
 AWAITING_BALDA_NAME_FILTER = AwaitingBaldaNameFilter()
+
+
+class AwaitingBaldaLetterFilter(filters.MessageFilter):
+    """Filter that matches replies with the starting letter."""
+
+    name = "balda_awaiting_letter"
+
+    def filter(self, message: Message) -> bool:  # type: ignore[override]
+        user = getattr(message, "from_user", None)
+        return bool(user and user.id in AWAITING_LETTER_USERS)
+
+
+AWAITING_BALDA_LETTER_FILTER = AwaitingBaldaLetterFilter()
 
 
 def _get_display_name(context: ContextTypes.DEFAULT_TYPE, user: User) -> str:
@@ -82,6 +103,14 @@ def release_name_request(context: ContextTypes.DEFAULT_TYPE, user_id: Optional[i
         store = context.application.user_data.get(user_id)
         if store is not None:
             store.pop(PENDING_KEY, None)
+
+
+def release_letter_request(user_id: Optional[int]) -> None:
+    """Clear the pending letter marker for the provided user."""
+
+    if not user_id:
+        return
+    AWAITING_LETTER_USERS.pop(user_id, None)
 
 
 async def _ensure_player_name(
@@ -288,11 +317,65 @@ async def start_button_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await query.answer("Сократите состав до 5 игроков.", show_alert=True)
         return
     state.has_started = True
-    await query.message.reply_text(
-        "Игровой движок ещё готовится — правила и очередь игроков сохранены."
-        " Как только игровой цикл будет подключён, лобби автоматически перейдёт к первому ходу.",
-    )
     await _publish_lobby(update, context, state)
+    await _send_letter_choice_prompt(state, context)
+
+
+async def letter_choice_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+    data = query.data or ""
+    _, _, payload = data.partition(":letter:")
+    action, _, game_id = payload.partition(":")
+    state = STATE_MANAGER.get_by_id(game_id)
+    if not state:
+        return
+    user = query.from_user
+    if not user or user.id != state.host_id:
+        await query.answer("Букву выбирает только хост лобби.", show_alert=True)
+        return
+    if action == "manual":
+        AWAITING_LETTER_USERS[user.id] = state.game_id
+        await query.edit_message_text("Введите стартовую букву вручную.")
+        if context.bot:
+            await context.bot.send_message(
+                state.chat_id,
+                "Введите одну кириллическую букву.",
+                reply_markup=ForceReply(selective=True),
+                message_thread_id=state.thread_id,
+            )
+        return
+    if action == "random":
+        if not RANDOM_LETTERS:
+            await query.answer("Нет доступных букв.", show_alert=True)
+            return
+        letter = random.choice(RANDOM_LETTERS)
+        await query.edit_message_text(f"Случайно выбрана буква: {letter.upper()}")
+        await _finalize_initial_letter(state, letter, context)
+
+
+async def handle_letter_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    user = update.effective_user
+    if not message or not user:
+        return
+    game_id = AWAITING_LETTER_USERS.get(user.id)
+    if not game_id:
+        return
+    state = STATE_MANAGER.get_by_id(game_id)
+    if not state:
+        release_letter_request(user.id)
+        await message.reply_text("Лобби не найдено, попробуйте снова.")
+        return
+    text = (message.text or "").strip().lower()
+    if len(text) != 1 or text not in CYRILLIC_ALPHABET:
+        await message.reply_text("Нужна одна кириллическая буква.")
+        return
+    release_letter_request(user.id)
+    await message.reply_text(f"Стартовая буква установлена: {text.upper()}")
+    await _finalize_initial_letter(state, text, context)
 
 
 def _format_score(state: GameState) -> str:
@@ -419,3 +502,47 @@ def _build_keyboard(state: GameState) -> Optional[InlineKeyboardMarkup]:
     if not buttons:
         return None
     return InlineKeyboardMarkup(buttons)
+
+
+async def _send_letter_choice_prompt(state: GameState, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not context.bot:
+        return
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "Ввести букву", callback_data=f"balda:letter:manual:{state.game_id}"
+                ),
+                InlineKeyboardButton(
+                    "Случайная буква", callback_data=f"balda:letter:random:{state.game_id}"
+                ),
+            ]
+        ]
+    )
+    await context.bot.send_message(
+        state.chat_id,
+        "Выберите стартовую букву:",
+        reply_markup=keyboard,
+        message_thread_id=state.thread_id,
+    )
+
+
+async def _finalize_initial_letter(
+    state: GameState, letter: str, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    state.base_letter = letter
+    state.sequence = letter
+    STATE_MANAGER.save(state)
+    if context.bot:
+        preview = RENDERER.render_sequence(state)
+        await context.bot.send_message(
+            state.chat_id,
+            f"🖼️ {preview}",
+            parse_mode="HTML",
+            message_thread_id=state.thread_id,
+        )
+        await context.bot.send_message(
+            state.chat_id,
+            "Game started",
+            message_thread_id=state.thread_id,
+        )

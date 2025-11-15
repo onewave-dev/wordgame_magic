@@ -9,10 +9,13 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 import app as root_app
 import balda_game
+from balda_game.handlers import lobby as balda_lobby
 from compose_word_game import word_game_app as app
 from grebeshok_game import grebeshok_app as greb_app
 from telegram.ext import Application, ApplicationHandlerStop
 
+
+compose_game = app
 
 class DummyMessage:
     def __init__(self, chat_id: int, user_id: int, text: str = "") -> None:
@@ -21,6 +24,9 @@ class DummyMessage:
         self.message_thread_id = None
         self.text = text
         self.from_user = SimpleNamespace(id=user_id)
+        self.from_user.full_name = ""
+        self.from_user.first_name = ""
+        self.from_user.username = ""
         self.replies = []
 
     async def reply_text(self, text: str, **kwargs):
@@ -176,6 +182,74 @@ def test_choose_game_routes_to_balda():
             root_app.REGISTERED_GAMES.clear()
             root_app.REGISTERED_GAMES.update(registered_snapshot)
             root_app.APPLICATION = application_snapshot
+
+    asyncio.run(run())
+
+
+def test_balda_start_button_prompts_letter_choice():
+    async def run():
+        balda_game.STATE_MANAGER.reset()
+        balda_lobby.AWAITING_LETTER_USERS.clear()
+        host_id = 901
+        guest_id = 902
+        chat_id = 5001
+        state = balda_game.STATE_MANAGER.create_lobby(host_id, chat_id)
+        state.players[host_id] = balda_game.PlayerState(user_id=host_id, name="Хост", is_host=True)
+        state.players[guest_id] = balda_game.PlayerState(user_id=guest_id, name="Гость")
+        state.players_active = [host_id, guest_id]
+        message = DummyMessage(chat_id, host_id, text="start")
+        query = DummyCallbackQuery(f"balda:start:{state.game_id}", message, host_id)
+        update = SimpleNamespace(callback_query=query)
+        bot = SimpleNamespace(
+            send_message=AsyncMock(return_value=SimpleNamespace(message_id=1))
+        )
+        context = SimpleNamespace(bot=bot)
+
+        with patch.object(balda_lobby, "_publish_lobby", AsyncMock()):
+            await balda_lobby.start_button_callback(update, context)
+
+        assert bot.send_message.await_count == 1
+        call = bot.send_message.await_args
+        _, text = call.args[:2]
+        keyboard = call.kwargs.get("reply_markup")
+        assert text == "Выберите стартовую букву:"
+        assert keyboard is not None
+        buttons = [btn.text for row in keyboard.inline_keyboard for btn in row]
+        assert "Ввести букву" in buttons
+        assert "Случайная буква" in buttons
+
+    asyncio.run(run())
+
+
+def test_balda_manual_letter_requires_single_cyrillic():
+    async def run():
+        balda_game.STATE_MANAGER.reset()
+        balda_lobby.AWAITING_LETTER_USERS.clear()
+        host_id = 1001
+        chat_id = 6001
+        state = balda_game.STATE_MANAGER.create_lobby(host_id, chat_id)
+        state.players[host_id] = balda_game.PlayerState(user_id=host_id, name="Хост", is_host=True)
+        balda_lobby.AWAITING_LETTER_USERS[host_id] = state.game_id
+        bot = SimpleNamespace(
+            send_message=AsyncMock(return_value=SimpleNamespace(message_id=2))
+        )
+        message = DummyMessage(chat_id, host_id, text="ab")
+        update = SimpleNamespace(effective_message=message, effective_user=SimpleNamespace(id=host_id))
+        context = SimpleNamespace(bot=bot)
+
+        await balda_lobby.handle_letter_reply(update, context)
+        assert any("Нужна одна кириллическая буква." in reply[0] for reply in message.replies)
+        assert balda_lobby.AWAITING_LETTER_USERS.get(host_id) == state.game_id
+
+        message.text = "К"
+        await balda_lobby.handle_letter_reply(update, context)
+        assert state.base_letter == "к"
+        assert host_id not in balda_lobby.AWAITING_LETTER_USERS
+        assert any("Стартовая буква установлена" in reply[0] for reply in message.replies)
+        assert bot.send_message.await_count == 2
+        texts = [call.args[1] for call in bot.send_message.await_args_list]
+        assert "<b>К</b>" in texts[0]
+        assert texts[1] == "Game started"
 
     asyncio.run(run())
 
