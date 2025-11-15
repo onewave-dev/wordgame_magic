@@ -10,10 +10,9 @@ from telegram import ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, Mes
 from telegram.error import TelegramError
 from telegram.ext import ApplicationHandlerStop, ContextTypes, filters
 
-from ..rendering import BaldaRenderer
 from ..state import GameState, PlayerState
 from ..state.manager import STATE_MANAGER
-from .gameplay import start_first_turn
+from .gameplay import start_first_turn, update_board_image
 
 MIN_PLAYERS = 2
 MAX_PLAYERS = 5
@@ -41,7 +40,6 @@ HELP_TEXT = (
 
 AWAITING_NAME_USERS: set[int] = set()
 AWAITING_LETTER_USERS: Dict[int, str] = {}
-RENDERER = BaldaRenderer()
 
 LETTER_EXCLUDED = {"ъ", "ё", "ы"}
 CYRILLIC_ALPHABET = tuple(chr(code) for code in range(ord("а"), ord("я") + 1)) + ("ё",)
@@ -534,17 +532,15 @@ async def _finalize_initial_letter(
     state.base_letter = letter
     state.sequence = letter
     STATE_MANAGER.save(state)
+    await update_board_image(state, context)
     if context.bot:
-        preview = RENDERER.render_sequence(state)
         await context.bot.send_message(
             state.chat_id,
-            f"🖼️ {preview}",
+            (
+                "Игра началась — стартовая буква: "
+                f"<b>{html.escape(letter.upper())}</b>. Ждём первый ход."
+            ),
             parse_mode="HTML",
-            message_thread_id=state.thread_id,
-        )
-        await context.bot.send_message(
-            state.chat_id,
-            "Игра началась — ждём первый ход.",
             message_thread_id=state.thread_id,
         )
     await start_first_turn(state, context)

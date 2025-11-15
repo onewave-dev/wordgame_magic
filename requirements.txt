@@ -6,3 +6,4 @@ openai>=1.0.0
 
 langchain-openai>=0.1.0
 beautifulsoup4>=4.12
+Pillow>=10.0
