@@ -45,7 +45,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 REGISTERED_GAMES.add("compose")
             await compose_game.start_cmd(update, context)
             return
-        if join_code in balda_game.REGISTRY.join_codes:
+        if balda_game.STATE_MANAGER.has_join_code(join_code):
             if "balda" not in REGISTERED_GAMES:
                 balda_game.register_handlers(APPLICATION)
                 REGISTERED_GAMES.add("balda")

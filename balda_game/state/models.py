@@ -1,4 +1,4 @@
-"""Data structures describing the Balda game state."""
+"""Dataclasses describing the Balda lobby and runtime state."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ class PlayerState:
 
 @dataclass(slots=True)
 class TurnRecord:
-    """Record of an action performed by a player during the game."""
+    """Record of a single action performed by a player."""
 
     player_id: int
     letter: str
@@ -39,13 +39,14 @@ class GameState:
     sequence: str = ""
     base_letter: Optional[str] = None
     current_player: Optional[int] = None
-    turn_direction: Optional[str] = None
+    direction: Optional[str] = None
     created_at: datetime = field(default_factory=datetime.utcnow)
     thread_id: Optional[int] = None
     players: Dict[int, PlayerState] = field(default_factory=dict)
-    player_order: List[int] = field(default_factory=list)
-    eliminated_players: List[int] = field(default_factory=list)
-    turns: List[TurnRecord] = field(default_factory=list)
+    players_active: List[int] = field(default_factory=list)
+    players_out: List[int] = field(default_factory=list)
+    words_used: List[TurnRecord] = field(default_factory=list)
+    has_passed: Dict[int, bool] = field(default_factory=dict)
     timer_job: Optional[object] = None
     has_started: bool = False
     join_code: Optional[str] = None
@@ -53,15 +54,16 @@ class GameState:
     lobby_message_chat_id: Optional[int] = None
 
     def reset_timer(self) -> None:
-        """Forget the currently scheduled timer job."""
+        """Forget any scheduled timer job for the current player."""
 
         self.timer_job = None
 
     def add_turn(self, turn: TurnRecord) -> None:
-        """Append a new turn to the history and advance bookkeeping."""
+        """Append a new turn to the history and update the sequence."""
 
-        self.turns.append(turn)
-        self.sequence = (
-            f"{turn.letter}{self.sequence}" if turn.direction == "left" else f"{self.sequence}{turn.letter}"
-        )
-        self.turn_direction = turn.direction
+        self.words_used.append(turn)
+        if turn.direction == "left":
+            self.sequence = f"{turn.letter}{self.sequence}"
+        else:
+            self.sequence = f"{self.sequence}{turn.letter}"
+        self.direction = turn.direction

@@ -13,7 +13,7 @@ from telegram.ext import (
     filters,
 )
 
-from ..services import clear_chat_state
+from ..state.manager import STATE_MANAGER
 from .lobby import (
     AWAITING_BALDA_NAME_FILTER,
     awaiting_name_guard,
@@ -32,7 +32,7 @@ from .lobby import (
 async def reset_for_chat(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Drop temporary state for the provided chat."""
 
-    clear_chat_state(chat_id)
+    STATE_MANAGER.reset_chat(chat_id)
     release_name_request(context, user_id)
 
 
