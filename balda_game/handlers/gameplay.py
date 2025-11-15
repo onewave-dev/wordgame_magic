@@ -6,6 +6,7 @@ import asyncio
 import html
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Dict, Optional
@@ -85,6 +86,17 @@ async def update_board_image(
     bot = context.bot
     if not bot:
         return
+    send_photo = getattr(bot, "send_photo", None)
+    edit_media = getattr(bot, "edit_message_media", None)
+    if not callable(send_photo):
+        send_text = getattr(bot, "send_message", None)
+        if callable(send_text):
+            await send_text(
+                state.chat_id,
+                "Game started",
+                message_thread_id=state.thread_id,
+            )
+        return
     game_id = state.game_id
     buffer = RENDERER.render_board_image(state, helper_word=helper_word)
     payload = buffer.getvalue()
@@ -97,17 +109,19 @@ async def update_board_image(
     if not helper_word and active_task and active_task is not current_task:
         _cancel_flash_task(game_id)
 
-    if state.board_message_id:
+    if state.board_message_id and callable(edit_media):
         try:
-            await bot.edit_message_media(
+            await edit_media(
                 chat_id=state.chat_id,
                 message_id=state.board_message_id,
                 media=InputMediaPhoto(media=_build_file()),
             )
         except TelegramError:
             state.board_message_id = None
+    elif state.board_message_id and not callable(edit_media):
+        state.board_message_id = None
     if not state.board_message_id:
-        sent = await bot.send_photo(
+        sent = await send_photo(
             state.chat_id,
             photo=_build_file(),
             message_thread_id=state.thread_id,
@@ -164,6 +178,18 @@ def _alive_players(state: GameState) -> list[PlayerState]:
         if player and not player.is_eliminated:
             alive.append(player)
     return alive
+
+
+def _format_duration(seconds: int) -> str:
+    minutes, seconds = divmod(max(seconds, 0), 60)
+    hours, minutes = divmod(minutes, 60)
+    parts: list[str] = []
+    if hours:
+        parts.append(f"{hours}ч")
+    if minutes or hours:
+        parts.append(f"{minutes:02d}м" if hours else f"{minutes}м")
+    parts.append(f"{seconds:02d}с" if minutes or hours else f"{seconds}с")
+    return "".join(parts)
 
 
 def _cancel_turn_jobs(state: GameState) -> None:
@@ -460,16 +486,88 @@ async def _advance_turn(state: GameState, context: ContextTypes.DEFAULT_TYPE) ->
     await _prompt_direction_choice(state, next_player, context)
 
 
+async def finish_game(
+    state: GameState, context: ContextTypes.DEFAULT_TYPE, winner: PlayerState
+) -> None:
+    """Announce the winner, share the final stats and clean up the state."""
+
+    _cancel_turn_jobs(state)
+    _cancel_flash_task(state.game_id)
+    now = datetime.utcnow()
+    duration_text = _format_duration(int((now - state.created_at).total_seconds()))
+    total_turns = len(state.words_used)
+    unique_words = len({turn.word for turn in state.words_used})
+    sequence_display = html.escape(state.sequence.upper() or "—")
+    winner_name = html.escape(winner.name)
+
+    elimination_order: list[str] = []
+    for player_id in state.players_out:
+        player = state.players.get(player_id)
+        if player and player.name:
+            elimination_order.append(html.escape(player.name))
+    elimination_summary = " → ".join(elimination_order + [f"Победитель {winner_name}"])
+
+    stats_lines = [
+        "📊 <b>Итоги партии</b>",
+        f"🧩 Сделано ходов: {total_turns}",
+        f"🕐 Длительность: {duration_text}",
+        f"🔠 Уникальных слов: {unique_words}",
+        f"💬 Финальная последовательность: <b>{sequence_display}</b>",
+        f"👥 Выбывание: {elimination_summary}",
+    ]
+
+    if context.bot:
+        await context.bot.send_message(
+            state.chat_id,
+            (
+                f"🏆 Победитель: <b>{winner_name}</b>!\n"
+                f"Финальная последовательность: <b>{sequence_display}</b>"
+            ),
+            parse_mode="HTML",
+            message_thread_id=state.thread_id,
+        )
+        await context.bot.send_message(
+            state.chat_id,
+            "\n".join(stats_lines),
+            parse_mode="HTML",
+            message_thread_id=state.thread_id,
+        )
+
+    STATE_MANAGER.drop_game(state.game_id)
+
+
+async def eliminate_player(
+    state: GameState,
+    context: ContextTypes.DEFAULT_TYPE,
+    player_id: int,
+) -> None:
+    """Mark the player as eliminated and either advance or finish the match."""
+
+    player = state.players.get(player_id)
+    if not player or player.is_eliminated:
+        return
+
+    player.is_eliminated = True
+    if player_id not in state.players_out:
+        state.players_out.append(player_id)
+    STATE_MANAGER.save(state)
+    _clear_pending_move(player_id)
+
+    alive = _alive_players(state)
+    if len(alive) == 1:
+        await finish_game(state, context, winner=alive[0])
+        return
+    if alive:
+        await _advance_turn(state, context)
+    else:
+        STATE_MANAGER.drop_game(state.game_id)
+
+
 async def _handle_loss(
     state: GameState, player_id: int, sequence: str, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     _cancel_turn_jobs(state)
     player = state.players.get(player_id)
-    if player:
-        player.is_eliminated = True
-        if player_id not in state.players_out:
-            state.players_out.append(player_id)
-    STATE_MANAGER.save(state)
     if context.bot:
         name = html.escape(player.name) if player else "Игрок"
         await context.bot.send_message(
@@ -480,7 +578,7 @@ async def _handle_loss(
             parse_mode="HTML",
             message_thread_id=state.thread_id,
         )
-    await _advance_turn(state, context)
+    await eliminate_player(state, context, player_id)
 
 
 async def turn_warning_job(context: CallbackContext) -> None:
@@ -531,11 +629,6 @@ async def turn_timeout_job(context: CallbackContext) -> None:
         return
     _cancel_turn_jobs(state)
     player = state.players.get(player_id)
-    if player:
-        player.is_eliminated = True
-        if player_id not in state.players_out:
-            state.players_out.append(player_id)
-    STATE_MANAGER.save(state)
     _clear_pending_move(player_id)
     if context.bot:
         name = html.escape(player.name) if player else "Игрок"
@@ -558,7 +651,7 @@ async def turn_timeout_job(context: CallbackContext) -> None:
         except TelegramError:
             pass
     await asyncio.sleep(3)
-    await _advance_turn(state, context)
+    await eliminate_player(state, context, player_id)
 
 
 __all__ = [
