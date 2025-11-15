@@ -15,6 +15,7 @@ from telegram.ext import (
 )
 from telegram.error import TelegramError
 
+import balda_game as balda_game
 import compose_word_game.word_game_app as compose_game
 import grebeshok_game.grebeshok_app as grebeshok_game
 
@@ -44,6 +45,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 REGISTERED_GAMES.add("compose")
             await compose_game.start_cmd(update, context)
             return
+        if join_code in balda_game.REGISTRY.join_codes:
+            if "balda" not in REGISTERED_GAMES:
+                balda_game.register_handlers(APPLICATION)
+                REGISTERED_GAMES.add("balda")
+            await balda_game.start_cmd(update, context)
+            return
         if join_code.startswith("join_") or join_code in grebeshok_game.JOIN_CODES:
             if "grebeshok" not in REGISTERED_GAMES:
                 grebeshok_game.register_handlers(APPLICATION)
@@ -55,6 +62,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             [
                 InlineKeyboardButton("Составь слово!", callback_data="game_compose"),
                 InlineKeyboardButton("Гребешок", callback_data="game_grebeshok"),
+                InlineKeyboardButton("Балда", callback_data="game_balda"),
             ]
         ]
     )
@@ -72,6 +80,7 @@ async def choose_game(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if chat_id is not None and user_id is not None:
         await compose_game.reset_for_chat(chat_id, user_id, context)
         await grebeshok_game.reset_for_chat(chat_id, user_id, context)
+        await balda_game.reset_for_chat(chat_id, user_id, context)
     if game == "game_compose":
         if "compose" not in REGISTERED_GAMES:
             compose_game.register_handlers(APPLICATION)
@@ -82,6 +91,11 @@ async def choose_game(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             grebeshok_game.register_handlers(APPLICATION)
             REGISTERED_GAMES.add("grebeshok")
         await grebeshok_game.newgame(update, context)
+    elif game == "game_balda":
+        if "balda" not in REGISTERED_GAMES:
+            balda_game.register_handlers(APPLICATION)
+            REGISTERED_GAMES.add("balda")
+        await balda_game.newgame(update, context)
     try:
         await query.delete_message()
     except Exception:
@@ -139,6 +153,7 @@ async def on_startup() -> None:
     bot_username = (await APPLICATION.bot.get_me()).username
     compose_game.BOT_USERNAME = bot_username
     grebeshok_game.BOT_USERNAME = bot_username
+    balda_game.BOT_USERNAME = bot_username
     APPLICATION.add_handler(CommandHandler("start", start))
     APPLICATION.add_handler(CommandHandler("quit", quit_command, block=False))
     APPLICATION.add_handler(CallbackQueryHandler(choose_game, pattern="^game_"))

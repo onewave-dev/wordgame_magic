@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 import app as root_app
+import balda_game
 from compose_word_game import word_game_app as app
 from grebeshok_game import grebeshok_app as greb_app
 from telegram.ext import Application, ApplicationHandlerStop
@@ -44,6 +45,34 @@ class DummyCallbackQuery:
 
     async def edit_message_text(self, text: str, **kwargs):
         self.edited_texts.append((text, kwargs))
+
+
+def test_start_menu_contains_balda_button():
+    async def run():
+        user_id = 501
+        chat_id = 601
+        message = DummyMessage(chat_id, user_id, text="/start")
+        update = SimpleNamespace(
+            message=message,
+            effective_message=message,
+            effective_chat=message.chat,
+            effective_user=SimpleNamespace(id=user_id),
+        )
+        context = SimpleNamespace(args=[], user_data={}, bot=None)
+
+        await root_app.start(update, context)
+
+        assert message.replies, "start command should produce a reply"
+        _, kwargs = message.replies[-1]
+        keyboard = kwargs.get("reply_markup")
+        assert keyboard is not None
+        assert any(
+            button.text == "Балда"
+            for row in keyboard.inline_keyboard
+            for button in row
+        )
+
+    asyncio.run(run())
 
 
 def test_start_then_handle_name_clears_flag():
@@ -110,6 +139,43 @@ def test_start_then_handle_name_clears_flag():
             app.LAST_REFRESH.update(old_last_refresh)
             app.CHAT_GAMES.clear()
             app.CHAT_GAMES.update(old_chat_games)
+
+    asyncio.run(run())
+
+
+def test_choose_game_routes_to_balda():
+    async def run():
+        registered_snapshot = root_app.REGISTERED_GAMES.copy()
+        application_snapshot = root_app.APPLICATION
+        try:
+            root_app.REGISTERED_GAMES.clear()
+            root_app.APPLICATION = Application.builder().token("123:ABC").build()
+
+            chat_id = 909
+            user_id = 808
+            start_message = DummyMessage(chat_id, user_id, text="choose")
+            query = DummyCallbackQuery("game_balda", start_message, user_id)
+            callback_update = SimpleNamespace(
+                callback_query=query,
+                effective_chat=start_message.chat,
+                effective_user=SimpleNamespace(id=user_id),
+                message=None,
+            )
+            context = SimpleNamespace()
+
+            with (
+                patch.object(compose_game, "reset_for_chat", AsyncMock()),
+                patch.object(greb_app, "reset_for_chat", AsyncMock()),
+                patch.object(balda_game, "reset_for_chat", AsyncMock()),
+                patch.object(balda_game, "register_handlers", lambda *a, **k: None),
+                patch.object(balda_game, "newgame", AsyncMock()) as newgame_mock,
+            ):
+                await root_app.choose_game(callback_update, context)
+                newgame_mock.assert_awaited()
+        finally:
+            root_app.REGISTERED_GAMES.clear()
+            root_app.REGISTERED_GAMES.update(registered_snapshot)
+            root_app.APPLICATION = application_snapshot
 
     asyncio.run(run())
 
