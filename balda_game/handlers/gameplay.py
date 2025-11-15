@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import html
 import json
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -12,9 +14,12 @@ from telegram import (
     ForceReply,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InputFile,
+    InputMediaPhoto,
     Message,
     Update,
 )
+from telegram.error import TelegramError
 from telegram.ext import ContextTypes, filters
 
 from ..rendering import BaldaRenderer
@@ -59,6 +64,76 @@ class PendingMove:
 
 
 PENDING_MOVES: Dict[int, PendingMove] = {}
+BOARD_FLASH_TASKS: Dict[str, asyncio.Task[None]] = {}
+
+
+def _cancel_flash_task(game_id: str) -> None:
+    task = BOARD_FLASH_TASKS.pop(game_id, None)
+    if task:
+        task.cancel()
+
+
+async def update_board_image(
+    state: GameState,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    helper_word: str | None = None,
+    flash_seconds: int | None = None,
+) -> None:
+    """Send a brand new board or update the existing image message."""
+
+    bot = context.bot
+    if not bot:
+        return
+    game_id = state.game_id
+    buffer = RENDERER.render_board_image(state, helper_word=helper_word)
+    payload = buffer.getvalue()
+
+    def _build_file() -> InputFile:
+        return InputFile(BytesIO(payload), filename="balda_board.png")
+
+    current_task = asyncio.current_task()
+    active_task = BOARD_FLASH_TASKS.get(game_id)
+    if not helper_word and active_task and active_task is not current_task:
+        _cancel_flash_task(game_id)
+
+    if state.board_message_id:
+        try:
+            await bot.edit_message_media(
+                chat_id=state.chat_id,
+                message_id=state.board_message_id,
+                media=InputMediaPhoto(media=_build_file()),
+            )
+        except TelegramError:
+            state.board_message_id = None
+    if not state.board_message_id:
+        sent = await bot.send_photo(
+            state.chat_id,
+            photo=_build_file(),
+            message_thread_id=state.thread_id,
+        )
+        state.board_message_id = sent.message_id
+        STATE_MANAGER.save(state)
+
+    if helper_word and flash_seconds:
+        _cancel_flash_task(game_id)
+
+        async def _reset_helper() -> None:
+            await asyncio.sleep(flash_seconds)
+            await update_board_image(state, context)
+
+        coroutine = _reset_helper()
+        if context.application:
+            task = context.application.create_task(coroutine)
+        else:
+            task = asyncio.create_task(coroutine)
+
+        def _cleanup(completed: asyncio.Task) -> None:
+            if BOARD_FLASH_TASKS.get(game_id) is completed:
+                BOARD_FLASH_TASKS.pop(game_id, None)
+
+        task.add_done_callback(_cleanup)
+        BOARD_FLASH_TASKS[game_id] = task
 
 
 class AwaitingBaldaMoveFilter(filters.MessageFilter):
@@ -282,6 +357,7 @@ async def _announce_turn(
         parse_mode="HTML",
         message_thread_id=state.thread_id,
     )
+    await update_board_image(state, context, helper_word=turn.word, flash_seconds=5)
 
 
 async def _advance_turn(state: GameState, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -321,5 +397,6 @@ __all__ = [
     "direction_choice_callback",
     "handle_move_submission",
     "start_first_turn",
+    "update_board_image",
 ]
 

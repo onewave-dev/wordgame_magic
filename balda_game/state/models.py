@@ -52,6 +52,7 @@ class GameState:
     join_code: Optional[str] = None
     lobby_message_id: Optional[int] = None
     lobby_message_chat_id: Optional[int] = None
+    board_message_id: Optional[int] = None
 
     def reset_timer(self) -> None:
         """Forget any scheduled timer job for the current player."""
