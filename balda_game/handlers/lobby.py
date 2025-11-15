@@ -13,6 +13,7 @@ from telegram.ext import ApplicationHandlerStop, ContextTypes, filters
 from ..rendering import BaldaRenderer
 from ..state import GameState, PlayerState
 from ..state.manager import STATE_MANAGER
+from .gameplay import start_first_turn
 
 MIN_PLAYERS = 2
 MAX_PLAYERS = 5
@@ -543,6 +544,7 @@ async def _finalize_initial_letter(
         )
         await context.bot.send_message(
             state.chat_id,
-            "Game started",
+            "Игра началась — ждём первый ход.",
             message_thread_id=state.thread_id,
         )
+    await start_first_turn(state, context)
