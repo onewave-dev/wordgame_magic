@@ -18,6 +18,7 @@ from .gameplay import (
     AWAITING_BALDA_MOVE_FILTER,
     direction_choice_callback,
     handle_move_submission,
+    pass_turn_callback,
 )
 from .lobby import (
     AWAITING_BALDA_LETTER_FILTER,
@@ -86,3 +87,4 @@ def register_handlers(application: Optional[Application]) -> None:
     application.add_handler(CallbackQueryHandler(start_button_callback, pattern="^balda:start:"))
     application.add_handler(CallbackQueryHandler(letter_choice_callback, pattern="^balda:letter:"))
     application.add_handler(CallbackQueryHandler(direction_choice_callback, pattern="^balda:turn:"))
+    application.add_handler(CallbackQueryHandler(pass_turn_callback, pattern="^balda:pass:"))

@@ -238,6 +238,8 @@ async def _prompt_direction_choice(
 ) -> None:
     if not context.bot:
         return
+    pass_used = bool(player.has_passed or state.has_passed.get(player.user_id))
+    pass_label = "✖️ Pass" if pass_used else "↩️ Pass"
     keyboard = InlineKeyboardMarkup(
         [
             [
@@ -247,7 +249,12 @@ async def _prompt_direction_choice(
                 InlineKeyboardButton(
                     "Right ▶️", callback_data=f"balda:turn:right:{state.game_id}"
                 ),
-            ]
+            ],
+            [
+                InlineKeyboardButton(
+                    pass_label, callback_data=f"balda:pass:{state.game_id}"
+                )
+            ],
         ]
     )
     await context.bot.send_message(
@@ -297,6 +304,56 @@ async def direction_choice_callback(update: Update, context: ContextTypes.DEFAUL
             reply_markup=ForceReply(selective=True),
             message_thread_id=state.thread_id,
         )
+
+
+async def pass_turn_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Allow the active player to skip their turn once per game."""
+
+    query = update.callback_query
+    if not query:
+        return
+    data = query.data or ""
+    _, _, game_id = data.partition(":pass:")
+    if not game_id:
+        await query.answer()
+        return
+    state = STATE_MANAGER.get_by_id(game_id)
+    if not state:
+        await query.answer("Игра не найдена.", show_alert=True)
+        return
+    user = query.from_user
+    if not user:
+        await query.answer()
+        return
+    if user.id != state.current_player:
+        await query.answer("Сейчас ход другого игрока.", show_alert=True)
+        return
+    player = state.players.get(user.id)
+    if not player or player.is_eliminated:
+        await query.answer("Игрок не найден.", show_alert=True)
+        return
+    if player.has_passed or state.has_passed.get(user.id):
+        await query.answer("Пас уже использован — попыток больше нет.", show_alert=True)
+        return
+    player.has_passed = True
+    state.has_passed[user.id] = True
+    STATE_MANAGER.save(state)
+    _clear_pending_move(user.id)
+    _cancel_turn_jobs(state)
+    await query.answer("Ход пропущен.")
+    try:
+        await query.edit_message_text("Вы пропустили ход — передаём очередь дальше.")
+    except TelegramError:
+        pass
+    if context.bot:
+        name = html.escape(player.name)
+        await context.bot.send_message(
+            state.chat_id,
+            f"🔁 {name} воспользовался пасом — ход переходит к следующему игроку.",
+            parse_mode="HTML",
+            message_thread_id=state.thread_id,
+        )
+    await _advance_turn(state, context)
 
 
 async def handle_move_submission(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -508,6 +565,7 @@ __all__ = [
     "AWAITING_BALDA_MOVE_FILTER",
     "direction_choice_callback",
     "handle_move_submission",
+    "pass_turn_callback",
     "start_first_turn",
     "update_board_image",
 ]
