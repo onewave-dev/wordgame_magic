@@ -23,6 +23,11 @@ Eliminated players **observe** the rest of the game (they still receive updates 
 
 ---
 
+## 0. Notes regarding Architechture
+1. Persistence at local folder on server (placed inside the bot folder on server)
+
+---
+
 ## 🏁 1. Lobby and Start
 1. Host starts with `/start` or `/newgame`.  
 2. Bot asks for a name.  
