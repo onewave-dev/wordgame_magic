@@ -10,6 +10,7 @@ from telegram import ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, Mes
 from telegram.error import TelegramError
 from telegram.ext import ApplicationHandlerStop, ContextTypes, filters
 
+from ..services import collect_game_stats
 from ..state import GameState, PlayerState
 from ..state.manager import STATE_MANAGER
 from .gameplay import start_first_turn, update_board_image
@@ -378,17 +379,21 @@ async def handle_letter_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 def _format_score(state: GameState) -> str:
+    stats = collect_game_stats(state)
     lines: List[str] = ["<b>Статистика «Балды»</b>"]
     status = "матч запущен" if state.has_started else "лобби собирается"
     lines.append(f"Сейчас {status}. Игроков: {len(state.players)}/{MAX_PLAYERS}.")
     if state.join_code:
         lines.append(f"Код приглашения: <code>{html.escape(state.join_code)}</code>")
+    lines.append(f"🧩 Сделано ходов: {stats.total_turns}")
+    lines.append(f"🕐 Время с создания лобби: {stats.duration_text}")
+    lines.append(f"🔠 Уникальных слов: {stats.unique_words}")
     if state.sequence:
-        lines.append(f"Текущее слово: <b>{html.escape(state.sequence)}</b>")
-    if state.words_used:
-        lines.append(f"Сделано ходов: {len(state.words_used)}")
+        lines.append(
+            f"💬 Текущая последовательность: <b>{html.escape(state.sequence.upper())}</b>"
+        )
     else:
-        lines.append('Ходы ещё не начинались — жмите "Старт", чтобы перейти к игре.')
+        lines.append("💬 Текущая последовательность ещё не выбрана.")
     if state.players_active:
         lines.append("\n<em>Список игроков:</em>")
         for idx, player_id in enumerate(state.players_active, start=1):
@@ -397,17 +402,32 @@ def _format_score(state: GameState) -> str:
                 continue
             marker = "👑 " if player.is_host else ""
             status_icon = "✖️" if player.is_eliminated else "✅"
+            lines.append(f"{status_icon} {idx}. {marker}{html.escape(player.name)}")
+    if state.words_used:
+        lines.append("\n<em>История слов:</em>")
+        for idx, turn in enumerate(state.words_used, start=1):
+            player = state.players.get(turn.player_id)
+            player_name = html.escape(player.name) if player else "Игрок"
+            direction_icon = "◀️" if turn.direction == "left" else "▶️"
+            letter_display = turn.letter.upper()
+            word_display = turn.word.upper()
             lines.append(
-                f"{status_icon} {idx}. {marker}{html.escape(player.name)}"
+                f"{idx}. {player_name} — <b>{word_display}</b> "
+                f"({direction_icon} +{letter_display})"
             )
-    if state.players_out:
-        cleaned = [
-            html.escape(state.players[pid].name)
-            for pid in state.players_out
-            if pid in state.players and state.players[pid].name
-        ]
-        if cleaned:
-            lines.append("\nВыбыли: " + ", ".join(cleaned))
+    else:
+        lines.append('\nИстория ходов пока пуста — жмите "Старт", чтобы начать игру.')
+    lines.append("\n<em>Выбывшие:</em>")
+    eliminated = [
+        html.escape(state.players[player_id].name)
+        for player_id in state.players_out
+        if player_id in state.players and state.players[player_id].name
+    ]
+    if eliminated:
+        for name in eliminated:
+            lines.append(f"• {name}")
+    else:
+        lines.append("• Пока никто не выбывал.")
     return "\n".join(lines)
 
 

@@ -6,7 +6,6 @@ import asyncio
 import html
 import json
 from dataclasses import dataclass
-from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Dict, Optional
@@ -24,6 +23,7 @@ from telegram.error import TelegramError
 from telegram.ext import CallbackContext, ContextTypes, filters
 
 from ..rendering import BaldaRenderer
+from ..services import collect_game_stats, format_stats_message
 from ..state import GameState, PlayerState, TurnRecord
 from ..state.manager import STATE_MANAGER
 
@@ -178,18 +178,6 @@ def _alive_players(state: GameState) -> list[PlayerState]:
         if player and not player.is_eliminated:
             alive.append(player)
     return alive
-
-
-def _format_duration(seconds: int) -> str:
-    minutes, seconds = divmod(max(seconds, 0), 60)
-    hours, minutes = divmod(minutes, 60)
-    parts: list[str] = []
-    if hours:
-        parts.append(f"{hours}ч")
-    if minutes or hours:
-        parts.append(f"{minutes:02d}м" if hours else f"{minutes}м")
-    parts.append(f"{seconds:02d}с" if minutes or hours else f"{seconds}с")
-    return "".join(parts)
 
 
 def _cancel_turn_jobs(state: GameState) -> None:
@@ -493,28 +481,10 @@ async def finish_game(
 
     _cancel_turn_jobs(state)
     _cancel_flash_task(state.game_id)
-    now = datetime.utcnow()
-    duration_text = _format_duration(int((now - state.created_at).total_seconds()))
-    total_turns = len(state.words_used)
-    unique_words = len({turn.word for turn in state.words_used})
-    sequence_display = html.escape(state.sequence.upper() or "—")
+    stats = collect_game_stats(state)
     winner_name = html.escape(winner.name)
-
-    elimination_order: list[str] = []
-    for player_id in state.players_out:
-        player = state.players.get(player_id)
-        if player and player.name:
-            elimination_order.append(html.escape(player.name))
-    elimination_summary = " → ".join(elimination_order + [f"Победитель {winner_name}"])
-
-    stats_lines = [
-        "📊 <b>Итоги партии</b>",
-        f"🧩 Сделано ходов: {total_turns}",
-        f"🕐 Длительность: {duration_text}",
-        f"🔠 Уникальных слов: {unique_words}",
-        f"💬 Финальная последовательность: <b>{sequence_display}</b>",
-        f"👥 Выбывание: {elimination_summary}",
-    ]
+    sequence_display = html.escape(stats.final_sequence)
+    stats_message = format_stats_message(stats, winner_name=winner.name)
 
     if context.bot:
         await context.bot.send_message(
@@ -528,7 +498,7 @@ async def finish_game(
         )
         await context.bot.send_message(
             state.chat_id,
-            "\n".join(stats_lines),
+            stats_message,
             parse_mode="HTML",
             message_thread_id=state.thread_id,
         )
