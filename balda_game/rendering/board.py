@@ -38,7 +38,7 @@ class BaldaRenderer:
     def render_recent_words(self, state: GameState, limit: int = 5) -> str:
         """Return a formatted history of recent turns."""
 
-        turns = state.turns[-limit:]
+        turns = state.words_used[-limit:]
         lines: Iterable[str] = (
             f"• {turn.word.upper()} ({'◀' if turn.direction == 'left' else '▶'} {turn.letter.upper()})"
             for turn in turns

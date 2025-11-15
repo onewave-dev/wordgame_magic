@@ -9,8 +9,8 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
 from telegram.error import TelegramError
 from telegram.ext import ApplicationHandlerStop, ContextTypes, filters
 
-from ..services import clear_chat_state, create_lobby, generate_join_code, get_game, REGISTRY
 from ..state import GameState, PlayerState
+from ..state.manager import STATE_MANAGER
 
 MIN_PLAYERS = 2
 MAX_PLAYERS = 5
@@ -165,16 +165,16 @@ async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _ensure_player_name(update, context, action="host_lobby", payload=None):
         return
     thread_id = message.message_thread_id or None
-    existing = get_game(chat.id, thread_id)
+    existing = STATE_MANAGER.get_by_chat(chat.id, thread_id)
     if existing and existing.has_started:
         await message.reply_text("Игра уже запущена в этом чате. Дождитесь завершения или используйте /quit.")
         return
-    clear_chat_state(chat.id)
-    state = create_lobby(user.id, chat.id, thread_id)
-    state.join_code = state.join_code or generate_join_code(state.game_id)
+    STATE_MANAGER.reset_chat(chat.id)
+    state = STATE_MANAGER.create_lobby(user.id, chat.id, thread_id)
+    STATE_MANAGER.ensure_join_code(state)
     host_name = _get_display_name(context, user)
     state.players[user.id] = PlayerState(user_id=user.id, name=host_name, is_host=True)
-    state.player_order = [user.id]
+    state.players_active = [user.id]
     state.has_started = False
     await _publish_lobby(update, context, state, fresh_start=True)
 
@@ -203,11 +203,7 @@ async def _join_lobby(update: Update, context: ContextTypes.DEFAULT_TYPE, join_c
     user = update.effective_user
     if not all([message, user, join_code]):
         return
-    game_id = REGISTRY.join_codes.get(join_code)
-    if not game_id:
-        await message.reply_text("Код приглашения не найден. Проверьте ссылку или попросите новую.")
-        return
-    state = REGISTRY.active_games.get(game_id)
+    state = STATE_MANAGER.get_by_join_code(join_code)
     if not state:
         await message.reply_text("Лобби уже закрыто. Попросите хоста создать новое.")
         return
@@ -221,7 +217,7 @@ async def _join_lobby(update: Update, context: ContextTypes.DEFAULT_TYPE, join_c
         await message.reply_text("Лобби заполнено: максимум 5 игроков.")
         return
     state.players[user.id] = PlayerState(user_id=user.id, name=_get_display_name(context, user))
-    state.player_order.append(user.id)
+    state.players_active.append(user.id)
     await message.reply_text(
         "Вы присоединились к лобби «Балда». Дождитесь команды старта от хоста.",
     )
@@ -240,7 +236,7 @@ async def score_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not message or not chat:
         return
     thread_id = message.message_thread_id or None
-    state = get_game(chat.id, thread_id)
+    state = STATE_MANAGER.get_by_chat(chat.id, thread_id)
     if not state:
         await message.reply_text("Для этого чата нет активного лобби «Балда». Используйте /newgame.")
         return
@@ -254,11 +250,10 @@ async def invite_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await query.answer()
     data = query.data or ""
     _, _, game_id = data.partition(":invite:")
-    state = REGISTRY.active_games.get(game_id)
+    state = STATE_MANAGER.get_by_id(game_id)
     if not state:
         return
-    code = state.join_code or generate_join_code(state.game_id)
-    state.join_code = code
+    code = STATE_MANAGER.ensure_join_code(state)
     bot_username = context.bot.username if context.bot else "wordgamesbot"
     link = f"https://t.me/{bot_username}?start={code}"
     text = (
@@ -277,7 +272,7 @@ async def start_button_callback(update: Update, context: ContextTypes.DEFAULT_TY
     await query.answer()
     data = query.data or ""
     _, _, game_id = data.partition(":start:")
-    state = REGISTRY.active_games.get(game_id)
+    state = STATE_MANAGER.get_by_id(game_id)
     if not state:
         return
     user = query.from_user
@@ -308,13 +303,13 @@ def _format_score(state: GameState) -> str:
         lines.append(f"Код приглашения: <code>{html.escape(state.join_code)}</code>")
     if state.sequence:
         lines.append(f"Текущее слово: <b>{html.escape(state.sequence)}</b>")
-    if state.turns:
-        lines.append(f"Сделано ходов: {len(state.turns)}")
+    if state.words_used:
+        lines.append(f"Сделано ходов: {len(state.words_used)}")
     else:
         lines.append('Ходы ещё не начинались — жмите "Старт", чтобы перейти к игре.')
-    if state.player_order:
+    if state.players_active:
         lines.append("\n<em>Список игроков:</em>")
-        for idx, player_id in enumerate(state.player_order, start=1):
+        for idx, player_id in enumerate(state.players_active, start=1):
             player = state.players.get(player_id)
             if not player:
                 continue
@@ -323,10 +318,10 @@ def _format_score(state: GameState) -> str:
             lines.append(
                 f"{status_icon} {idx}. {marker}{html.escape(player.name)}"
             )
-    if state.eliminated_players:
+    if state.players_out:
         cleaned = [
             html.escape(state.players[pid].name)
-            for pid in state.eliminated_players
+            for pid in state.players_out
             if pid in state.players and state.players[pid].name
         ]
         if cleaned:
@@ -389,15 +384,20 @@ def _format_lobby(state: GameState, *, fresh_start: bool) -> str:
         lines.append("Это лобби закреплено в текущей ветке чата.")
     slots_line = f"Игроки ({len(state.players)}/{MAX_PLAYERS}):"
     lines.append(slots_line)
-    for idx, player_id in enumerate(state.player_order, start=1):
+    for idx, player_id in enumerate(state.players_active, start=1):
         player = state.players.get(player_id)
         if not player:
             continue
         marker = "👑 " if player.is_host else ""
         status = " (выбыл)" if player.is_eliminated else ""
         lines.append(f"{idx}. {marker}{html.escape(player.name)}{status}")
-    if len(state.players) < MIN_PLAYERS:
-        need = MIN_PLAYERS - len(state.players)
+    active_count = sum(
+        1
+        for pid in state.players_active
+        if (player := state.players.get(pid)) and not player.is_eliminated
+    )
+    if active_count < MIN_PLAYERS:
+        need = MIN_PLAYERS - active_count
         lines.append(f"Нужно ещё {need} игрок(а) для старта.")
     elif len(state.players) >= MAX_PLAYERS:
         lines.append('Лобби заполнено — можно сразу жать "Старт".')
