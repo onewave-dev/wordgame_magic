@@ -14,6 +14,11 @@ from telegram.ext import (
 )
 
 from ..state.manager import STATE_MANAGER
+from .gameplay import (
+    AWAITING_BALDA_MOVE_FILTER,
+    direction_choice_callback,
+    handle_move_submission,
+)
 from .lobby import (
     AWAITING_BALDA_LETTER_FILTER,
     AWAITING_BALDA_NAME_FILTER,
@@ -69,6 +74,15 @@ def register_handlers(application: Optional[Application]) -> None:
         ),
         group=-1,
     )
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & (~filters.COMMAND) & AWAITING_BALDA_MOVE_FILTER,
+            handle_move_submission,
+            block=False,
+        ),
+        group=-1,
+    )
     application.add_handler(CallbackQueryHandler(invite_callback, pattern="^balda:invite:"))
     application.add_handler(CallbackQueryHandler(start_button_callback, pattern="^balda:start:"))
     application.add_handler(CallbackQueryHandler(letter_choice_callback, pattern="^balda:letter:"))
+    application.add_handler(CallbackQueryHandler(direction_choice_callback, pattern="^balda:turn:"))

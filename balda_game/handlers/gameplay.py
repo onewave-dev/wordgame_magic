@@ -1,0 +1,325 @@
+"""Runtime turn handling for the Balda gameplay loop."""
+
+from __future__ import annotations
+
+import html
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, Optional
+
+from telegram import (
+    ForceReply,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    Update,
+)
+from telegram.ext import ContextTypes, filters
+
+from ..rendering import BaldaRenderer
+from ..state import GameState, PlayerState, TurnRecord
+from ..state.manager import STATE_MANAGER
+
+
+BASE_DIR = Path(__file__).resolve().parents[2]
+DICT_PATH = BASE_DIR / "nouns_ru_pymorphy2_yaspeller.jsonl"
+WHITELIST_PATH = BASE_DIR / "whitelist.jsonl"
+
+
+def _normalize_word(value: str) -> str:
+    return value.strip().lower().replace("ё", "е")
+
+
+def _load_dictionary() -> set[str]:
+    words: set[str] = set()
+    for path in (DICT_PATH, WHITELIST_PATH):
+        if not path.exists():
+            continue
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            word = payload.get("word")
+            if not isinstance(word, str):
+                continue
+            words.add(_normalize_word(word))
+    return words
+
+
+BALDA_DICTIONARY = _load_dictionary()
+RENDERER = BaldaRenderer()
+
+
+@dataclass(slots=True)
+class PendingMove:
+    game_id: str
+    direction: str
+
+
+PENDING_MOVES: Dict[int, PendingMove] = {}
+
+
+class AwaitingBaldaMoveFilter(filters.MessageFilter):
+    """Match messages from players who are about to enter a move."""
+
+    name = "balda_awaiting_move"
+
+    def filter(self, message: Message) -> bool:  # type: ignore[override]
+        user = getattr(message, "from_user", None)
+        return bool(user and user.id in PENDING_MOVES)
+
+
+AWAITING_BALDA_MOVE_FILTER = AwaitingBaldaMoveFilter()
+
+
+def _is_cyrillic(text: str) -> bool:
+    return all("а" <= ch <= "я" for ch in text if ch.isalpha())
+
+
+def _clear_pending_move(user_id: int) -> None:
+    PENDING_MOVES.pop(user_id, None)
+
+
+def _alive_players(state: GameState) -> list[PlayerState]:
+    alive: list[PlayerState] = []
+    for player_id in state.players_active:
+        player = state.players.get(player_id)
+        if player and not player.is_eliminated:
+            alive.append(player)
+    return alive
+
+
+def _pick_next_player(state: GameState, *, advance: bool) -> Optional[PlayerState]:
+    alive = _alive_players(state)
+    if not alive:
+        return None
+    if not advance and state.current_player:
+        current = state.players.get(state.current_player)
+        if current and not current.is_eliminated:
+            return current
+    start_index = 0
+    if advance and state.current_player in state.players_active:
+        try:
+            start_index = state.players_active.index(state.current_player) + 1
+        except ValueError:
+            start_index = 0
+    total = len(state.players_active)
+    for offset in range(total):
+        idx = (start_index + offset) % total
+        player_id = state.players_active[idx]
+        player = state.players.get(player_id)
+        if player and not player.is_eliminated:
+            return player
+    return None
+
+
+async def start_first_turn(state: GameState, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Select the first active player and prompt them to choose a side."""
+
+    player = _pick_next_player(state, advance=False)
+    if not player:
+        return
+    state.current_player = player.user_id
+    state.direction = None
+    STATE_MANAGER.save(state)
+    await _prompt_direction_choice(state, player, context)
+
+
+async def _prompt_direction_choice(
+    state: GameState, player: PlayerState, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    if not context.bot:
+        return
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "◀️ Left", callback_data=f"balda:turn:left:{state.game_id}"
+                ),
+                InlineKeyboardButton(
+                    "Right ▶️", callback_data=f"balda:turn:right:{state.game_id}"
+                ),
+            ]
+        ]
+    )
+    await context.bot.send_message(
+        state.chat_id,
+        f"Ход игрока <b>{html.escape(player.name)}</b>. Выберите сторону для новой буквы.",
+        parse_mode="HTML",
+        reply_markup=keyboard,
+        message_thread_id=state.thread_id,
+    )
+
+
+async def direction_choice_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle inline button clicks for the left/right choice."""
+
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+    data = query.data or ""
+    _, _, payload = data.partition(":turn:")
+    direction, _, game_id = payload.partition(":")
+    state = STATE_MANAGER.get_by_id(game_id)
+    if not state:
+        return
+    user = query.from_user
+    if not user:
+        return
+    if user.id != state.current_player:
+        await query.answer("Сейчас ход другого игрока.", show_alert=True)
+        return
+    if direction not in {"left", "right"}:
+        await query.answer("Неверная сторона.", show_alert=True)
+        return
+    PENDING_MOVES[user.id] = PendingMove(game_id=game_id, direction=direction)
+    await query.edit_message_text(
+        f"Добавляем букву {'слева' if direction == 'left' else 'справа'}."
+    )
+    if context.bot:
+        await context.bot.send_message(
+            state.chat_id,
+            (
+                "Введите ход в формате: <code>буква слово</code>.\n"
+                "Например: <code>л плакат</code>."
+            ),
+            parse_mode="HTML",
+            reply_markup=ForceReply(selective=True),
+            message_thread_id=state.thread_id,
+        )
+
+
+async def handle_move_submission(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Parse and validate the player's textual turn."""
+
+    message = update.effective_message
+    user = update.effective_user
+    if not message or not user:
+        return
+    pending = PENDING_MOVES.get(user.id)
+    if not pending:
+        return
+    state = STATE_MANAGER.get_by_id(pending.game_id)
+    if not state:
+        _clear_pending_move(user.id)
+        await message.reply_text("Игра не найдена. Попробуйте снова.")
+        return
+    if user.id != state.current_player:
+        _clear_pending_move(user.id)
+        await message.reply_text("Сейчас ход другого игрока.")
+        return
+    text = (message.text or "").strip()
+    parts = text.split()
+    if len(parts) != 2:
+        await message.reply_text("Нужен формат: одна буква и слово через пробел.")
+        return
+    letter_raw, word_raw = parts
+    normalized_letter = _normalize_word(letter_raw)
+    if len(normalized_letter) != 1 or not _is_cyrillic(normalized_letter):
+        await message.reply_text("Первая часть должна быть одной кириллической буквой.")
+        return
+    normalized_word = _normalize_word(word_raw)
+    if not normalized_word.isalpha() or not _is_cyrillic(normalized_word):
+        await message.reply_text("В слове используйте только кириллические буквы.")
+        return
+    if normalized_word not in BALDA_DICTIONARY:
+        await message.reply_text("❌ Слово не найдено в словаре. Попробуйте другое.")
+        return
+    if any(
+        turn.word == normalized_word and turn.player_id != user.id
+        for turn in state.words_used
+    ):
+        await message.reply_text("Это слово уже использовал другой игрок.")
+        return
+    new_sequence = (
+        normalized_letter + _normalize_word(state.sequence)
+        if pending.direction == "left"
+        else _normalize_word(state.sequence) + normalized_letter
+    )
+    if new_sequence not in normalized_word:
+        await message.reply_text(
+            "Слово должно содержать новую последовательность букв целиком."
+        )
+        return
+    if len(new_sequence) > 2 and new_sequence in BALDA_DICTIONARY:
+        await _handle_loss(state, user.id, new_sequence, context)
+        _clear_pending_move(user.id)
+        return
+    turn = TurnRecord(
+        player_id=user.id,
+        letter=normalized_letter,
+        word=normalized_word,
+        direction=pending.direction,
+    )
+    state.add_turn(turn)
+    STATE_MANAGER.save(state)
+    _clear_pending_move(user.id)
+    await _announce_turn(state, turn, context)
+    await _advance_turn(state, context)
+
+
+async def _announce_turn(
+    state: GameState, turn: TurnRecord, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    if not context.bot:
+        return
+    player = state.players.get(turn.player_id)
+    preview = RENDERER.render_sequence(state)
+    word_display = turn.word.upper()
+    letter_display = turn.letter.upper()
+    direction_text = "слева" if turn.direction == "left" else "справа"
+    text = (
+        f"💡 {html.escape(player.name if player else 'Игрок')} добавил {direction_text} букву"
+        f" <b>{letter_display}</b> (слово: <b>{word_display}</b>).\n"
+        f"Текущая последовательность: {preview}"
+    )
+    await context.bot.send_message(
+        state.chat_id,
+        text,
+        parse_mode="HTML",
+        message_thread_id=state.thread_id,
+    )
+
+
+async def _advance_turn(state: GameState, context: ContextTypes.DEFAULT_TYPE) -> None:
+    next_player = _pick_next_player(state, advance=True)
+    if not next_player:
+        return
+    state.current_player = next_player.user_id
+    state.direction = None
+    STATE_MANAGER.save(state)
+    await _prompt_direction_choice(state, next_player, context)
+
+
+async def _handle_loss(
+    state: GameState, player_id: int, sequence: str, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    player = state.players.get(player_id)
+    if player:
+        player.is_eliminated = True
+        if player_id not in state.players_out:
+            state.players_out.append(player_id)
+    STATE_MANAGER.save(state)
+    if context.bot:
+        name = html.escape(player.name) if player else "Игрок"
+        await context.bot.send_message(
+            state.chat_id,
+            (
+                f"❌ {name} образовал существующее слово <b>{sequence.upper()}</b> и выбывает."
+            ),
+            parse_mode="HTML",
+            message_thread_id=state.thread_id,
+        )
+    await _advance_turn(state, context)
+
+
+__all__ = [
+    "AWAITING_BALDA_MOVE_FILTER",
+    "direction_choice_callback",
+    "handle_move_submission",
+    "start_first_turn",
+]
+
