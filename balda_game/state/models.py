@@ -47,7 +47,7 @@ class GameState:
     players_out: List[int] = field(default_factory=list)
     words_used: List[TurnRecord] = field(default_factory=list)
     has_passed: Dict[int, bool] = field(default_factory=dict)
-    timer_job: Optional[object] = None
+    timer_job: Dict[str, object] = field(default_factory=dict)
     has_started: bool = False
     join_code: Optional[str] = None
     lobby_message_id: Optional[int] = None
@@ -55,9 +55,18 @@ class GameState:
     board_message_id: Optional[int] = None
 
     def reset_timer(self) -> None:
-        """Forget any scheduled timer job for the current player."""
+        """Cancel and forget scheduled timer jobs for the current player."""
 
-        self.timer_job = None
+        jobs = list(self.timer_job.values())
+        for job in jobs:
+            try:
+                job.schedule_removal()  # type: ignore[attr-defined]
+            except Exception:
+                try:
+                    job.cancel()  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+        self.timer_job.clear()
 
     def add_turn(self, turn: TurnRecord) -> None:
         """Append a new turn to the history and update the sequence."""

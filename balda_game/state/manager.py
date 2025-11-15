@@ -77,7 +77,9 @@ class GameStateManager:
             game_id = self._chat_index.pop(key, None)
             if not game_id:
                 continue
-            self._active_games.pop(game_id, None)
+            state = self._active_games.pop(game_id, None)
+            if state:
+                state.reset_timer()
             stale_codes = [code for code, gid in self._join_codes.items() if gid == game_id]
             for code in stale_codes:
                 self._join_codes.pop(code, None)
@@ -88,6 +90,7 @@ class GameStateManager:
         state = self._active_games.pop(game_id, None)
         if not state:
             return
+        state.reset_timer()
         key = (state.chat_id, state.thread_id or 0)
         self._chat_index.pop(key, None)
         stale_codes = [code for code, gid in self._join_codes.items() if gid == game_id]

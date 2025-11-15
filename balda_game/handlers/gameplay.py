@@ -20,7 +20,7 @@ from telegram import (
     Update,
 )
 from telegram.error import TelegramError
-from telegram.ext import ContextTypes, filters
+from telegram.ext import CallbackContext, ContextTypes, filters
 
 from ..rendering import BaldaRenderer
 from ..state import GameState, PlayerState, TurnRecord
@@ -166,6 +166,37 @@ def _alive_players(state: GameState) -> list[PlayerState]:
     return alive
 
 
+def _cancel_turn_jobs(state: GameState) -> None:
+    """Cancel any pending reminder/timeout jobs for the active player."""
+
+    state.reset_timer()
+
+
+def _schedule_turn_jobs(
+    state: GameState, player: PlayerState, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Schedule reminder and timeout jobs for the current player's move."""
+
+    if not context.job_queue:
+        return
+    data = {"game_id": state.game_id, "player_id": player.user_id}
+    _cancel_turn_jobs(state)
+    reminder = context.job_queue.run_once(
+        turn_warning_job,
+        45,
+        data=dict(data),
+        name=f"balda_warn_{state.game_id}_{player.user_id}",
+    )
+    timeout = context.job_queue.run_once(
+        turn_timeout_job,
+        60,
+        data=dict(data),
+        name=f"balda_timeout_{state.game_id}_{player.user_id}",
+    )
+    state.timer_job["reminder"] = reminder
+    state.timer_job["timeout"] = timeout
+
+
 def _pick_next_player(state: GameState, *, advance: bool) -> Optional[PlayerState]:
     alive = _alive_players(state)
     if not alive:
@@ -226,6 +257,7 @@ async def _prompt_direction_choice(
         reply_markup=keyboard,
         message_thread_id=state.thread_id,
     )
+    _schedule_turn_jobs(state, player, context)
 
 
 async def direction_choice_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -332,6 +364,7 @@ async def handle_move_submission(update: Update, context: ContextTypes.DEFAULT_T
     state.add_turn(turn)
     STATE_MANAGER.save(state)
     _clear_pending_move(user.id)
+    _cancel_turn_jobs(state)
     await _announce_turn(state, turn, context)
     await _advance_turn(state, context)
 
@@ -373,6 +406,7 @@ async def _advance_turn(state: GameState, context: ContextTypes.DEFAULT_TYPE) ->
 async def _handle_loss(
     state: GameState, player_id: int, sequence: str, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
+    _cancel_turn_jobs(state)
     player = state.players.get(player_id)
     if player:
         player.is_eliminated = True
@@ -389,6 +423,84 @@ async def _handle_loss(
             parse_mode="HTML",
             message_thread_id=state.thread_id,
         )
+    await _advance_turn(state, context)
+
+
+async def turn_warning_job(context: CallbackContext) -> None:
+    """Send a reminder to the current player and the shared chat."""
+
+    job = context.job
+    data = job.data if job else None
+    game_id = data.get("game_id") if isinstance(data, dict) else None
+    player_id = data.get("player_id") if isinstance(data, dict) else None
+    if not game_id or not player_id or not context.bot:
+        return
+    state = STATE_MANAGER.get_by_id(game_id)
+    if not state or state.current_player != player_id:
+        return
+    player = state.players.get(player_id)
+    text = "15 seconds left"
+    try:
+        await context.bot.send_message(player_id, text)
+    except TelegramError:
+        pass
+    chat_text = text
+    parse_mode = None
+    if player and player.name:
+        chat_text = f"15 seconds left — ход игрока <b>{html.escape(player.name)}</b>."
+        parse_mode = "HTML"
+    try:
+        await context.bot.send_message(
+            state.chat_id,
+            chat_text,
+            parse_mode=parse_mode,
+            message_thread_id=state.thread_id,
+        )
+    except TelegramError:
+        pass
+
+
+async def turn_timeout_job(context: CallbackContext) -> None:
+    """Handle player elimination when the per-turn timer expires."""
+
+    job = context.job
+    data = job.data if job else None
+    game_id = data.get("game_id") if isinstance(data, dict) else None
+    player_id = data.get("player_id") if isinstance(data, dict) else None
+    if not game_id or not player_id:
+        return
+    state = STATE_MANAGER.get_by_id(game_id)
+    if not state or state.current_player != player_id:
+        return
+    _cancel_turn_jobs(state)
+    player = state.players.get(player_id)
+    if player:
+        player.is_eliminated = True
+        if player_id not in state.players_out:
+            state.players_out.append(player_id)
+    STATE_MANAGER.save(state)
+    _clear_pending_move(player_id)
+    if context.bot:
+        name = html.escape(player.name) if player else "Игрок"
+        try:
+            await context.bot.send_message(
+                state.chat_id,
+                (
+                    f"❌ {name} не успел(а) сделать ход вовремя и теперь наблюдает за игрой."
+                ),
+                parse_mode="HTML",
+                message_thread_id=state.thread_id,
+            )
+        except TelegramError:
+            pass
+        try:
+            await context.bot.send_message(
+                player_id,
+                "Ваш ход пропущен по тайм-ауту — вы переведены в наблюдатели.",
+            )
+        except TelegramError:
+            pass
+    await asyncio.sleep(3)
     await _advance_turn(state, context)
 
 
