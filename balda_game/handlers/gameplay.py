@@ -64,8 +64,38 @@ class PendingMove:
     direction: str
 
 
+@dataclass(slots=True)
+class DirectionPromptMessage:
+    """Track the last direction selection keyboard sent to a player."""
+
+    chat_id: int
+    message_id: int
+
+
 PENDING_MOVES: Dict[int, PendingMove] = {}
 BOARD_FLASH_TASKS: Dict[str, asyncio.Task[None]] = {}
+DIRECTION_PROMPTS: Dict[tuple[str, int], DirectionPromptMessage] = {}
+
+
+async def _drop_direction_prompt(
+    game_id: str,
+    player_id: int,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    delete_message: bool = False,
+) -> bool:
+    """Remove stored prompt metadata and optionally delete the private message."""
+
+    key = (game_id, player_id)
+    prompt = DIRECTION_PROMPTS.pop(key, None)
+    if not prompt:
+        return False
+    if delete_message and context.bot:
+        try:
+            await context.bot.delete_message(prompt.chat_id, prompt.message_id)
+        except TelegramError:
+            pass
+    return True
 
 
 def _cancel_flash_task(game_id: str) -> None:
@@ -250,6 +280,9 @@ async def start_first_turn(state: GameState, context: ContextTypes.DEFAULT_TYPE)
 async def _prompt_direction_choice(
     state: GameState, player: PlayerState, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
+    re_prompted = await _drop_direction_prompt(
+        state.game_id, player.user_id, context, delete_message=True
+    )
     if not context.bot:
         return
     pass_used = bool(player.has_passed or state.has_passed.get(player.user_id))
@@ -271,13 +304,73 @@ async def _prompt_direction_choice(
             ],
         ]
     )
-    await context.bot.send_message(
-        state.chat_id,
-        f"Ход игрока <b>{html.escape(player.name)}</b>. Выберите сторону для новой буквы.",
-        parse_mode="HTML",
-        reply_markup=keyboard,
-        message_thread_id=state.thread_id,
+
+    private_sequence = html.escape(state.sequence.upper()) if state.sequence else "—"
+    private_text = (
+        "Ваша очередь в игре «Балда». Выберите сторону, куда добавить новую букву.\n"
+        f"Текущая последовательность: <b>{private_sequence}</b>.\n"
+        "После выбора вернитесь в общий чат игры и отправьте ход в формате «буква слово»."
     )
+    dm_sent = False
+    try:
+        direct_message = await context.bot.send_message(
+            player.user_id,
+            private_text,
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
+    except TelegramError:
+        dm_sent = False
+    else:
+        dm_sent = True
+        DIRECTION_PROMPTS[(state.game_id, player.user_id)] = DirectionPromptMessage(
+            chat_id=direct_message.chat_id,
+            message_id=direct_message.message_id,
+        )
+
+    name_html = html.escape(player.name)
+    chat_lines = [
+        f"Ход игрока <b>{name_html}</b>. Выберите сторону для новой буквы.",
+    ]
+    if re_prompted:
+        chat_lines.append("🔁 Клавиатура для выбора стороны отправлена повторно.")
+    if dm_sent:
+        chat_lines.append("Кнопки отправлены в личные сообщения текущему игроку.")
+    else:
+        chat_lines.append(
+            "⚠️ Бот не смог написать игроку в личные сообщения — дублируем кнопки в общий чат."
+        )
+    try:
+        await context.bot.send_message(
+            state.chat_id,
+            "\n".join(chat_lines),
+            parse_mode="HTML",
+            message_thread_id=state.thread_id,
+        )
+    except TelegramError:
+        pass
+
+    if not dm_sent:
+        fallback_notice = (
+            f"Нажмите нужную кнопку ниже или попросите <b>{name_html}</b> начать чат с ботом, "
+            "чтобы получать подсказки в личных сообщениях."
+        )
+        try:
+            fallback_message = await context.bot.send_message(
+                state.chat_id,
+                fallback_notice,
+                parse_mode="HTML",
+                reply_markup=keyboard,
+                message_thread_id=state.thread_id,
+            )
+        except TelegramError:
+            pass
+        else:
+            DIRECTION_PROMPTS[(state.game_id, player.user_id)] = DirectionPromptMessage(
+                chat_id=fallback_message.chat_id,
+                message_id=fallback_message.message_id,
+            )
+
     _schedule_turn_jobs(state, player, context)
 
 
@@ -304,9 +397,13 @@ async def direction_choice_callback(update: Update, context: ContextTypes.DEFAUL
         await query.answer("Неверная сторона.", show_alert=True)
         return
     PENDING_MOVES[user.id] = PendingMove(game_id=game_id, direction=direction)
-    await query.edit_message_text(
-        f"Добавляем букву {'слева' if direction == 'left' else 'справа'}."
-    )
+    await _drop_direction_prompt(state.game_id, user.id, context)
+    try:
+        await query.edit_message_text(
+            f"Добавляем букву {'слева' if direction == 'left' else 'справа'}."
+        )
+    except TelegramError:
+        pass
     if context.bot:
         await context.bot.send_message(
             state.chat_id,
@@ -353,6 +450,7 @@ async def pass_turn_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     state.has_passed[user.id] = True
     STATE_MANAGER.save(state)
     _clear_pending_move(user.id)
+    await _drop_direction_prompt(state.game_id, user.id, context)
     _cancel_turn_jobs(state)
     await query.answer("Ход пропущен.")
     try:
@@ -600,6 +698,7 @@ async def turn_timeout_job(context: CallbackContext) -> None:
     _cancel_turn_jobs(state)
     player = state.players.get(player_id)
     _clear_pending_move(player_id)
+    await _drop_direction_prompt(state.game_id, player_id, context)
     if context.bot:
         name = html.escape(player.name) if player else "Игрок"
         try:
