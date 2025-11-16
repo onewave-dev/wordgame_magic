@@ -115,10 +115,18 @@ async def quit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if compose_game_state:
             await compose_game.quit_cmd(update, context)
             return
+        balda_game_state = balda_game.get_game(chat_id, thread_id)
+        if balda_game_state:
+            await balda_game.quit_cmd(update, context)
+            return
 
     user = update.effective_user
     user_id = user.id if user else None
     if user_id is not None:
+        balda_state = balda_game.find_game_for_player(user_id)
+        if balda_state:
+            await balda_game.quit_cmd(update, context)
+            return
         for game in grebeshok_game.ACTIVE_GAMES.values():
             if user_id in game.players:
                 await grebeshok_game.quit_cmd(update, context)
