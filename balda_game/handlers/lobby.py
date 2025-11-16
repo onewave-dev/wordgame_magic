@@ -185,6 +185,43 @@ async def _sync_invite_keyboard(state: GameState, context: ContextTypes.DEFAULT_
         await _show_invite_keyboard(state, context)
 
 
+async def _announce_player_join(
+    state: GameState,
+    context: ContextTypes.DEFAULT_TYPE,
+    player: PlayerState,
+) -> None:
+    """Notify the lobby chat that a new participant has joined."""
+
+    bot = context.bot
+    if not bot or not state.chat_id:
+        return
+
+    active_count = sum(
+        1
+        for pid in state.players_active
+        if (participant := state.players.get(pid)) and not participant.is_eliminated
+    )
+    player_name = html.escape(player.name)
+    lines = [
+        f"👋 <b>{player_name}</b> присоединился к лобби.",
+        f"Игроков сейчас: {active_count}/{MAX_PLAYERS}.",
+    ]
+    if active_count >= MAX_PLAYERS:
+        lines.append('Лобби заполнено — можно сразу жать «Старт».')
+    elif active_count >= MIN_PLAYERS:
+        lines.append('Можно нажать «🚀 Старт», как только все готовы.')
+    else:
+        need = MIN_PLAYERS - active_count
+        lines.append(f"Нужно ещё {need} игрок(а) для старта.")
+
+    await bot.send_message(
+        state.chat_id,
+        "\n".join(lines),
+        parse_mode="HTML",
+        message_thread_id=state.thread_id,
+    )
+
+
 async def _ensure_player_name(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -323,8 +360,10 @@ async def _join_lobby(update: Update, context: ContextTypes.DEFAULT_TYPE, join_c
     await message.reply_text(
         "Вы присоединились к лобби «Балда». Дождитесь команды старта от хоста.",
     )
+    player = state.players[user.id]
     await _publish_lobby(update, context, state)
     await _sync_invite_keyboard(state, context)
+    await _announce_player_join(state, context, player)
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
