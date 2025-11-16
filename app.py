@@ -115,10 +115,24 @@ async def quit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if compose_game_state:
             await compose_game.quit_cmd(update, context)
             return
+        balda_state = balda_game.get_game(chat_id, thread_id)
+        if balda_state:
+            if "balda" not in REGISTERED_GAMES:
+                balda_game.register_handlers(APPLICATION)
+                REGISTERED_GAMES.add("balda")
+            await balda_game.quit_cmd(update, context)
+            return
 
     user = update.effective_user
     user_id = user.id if user else None
     if user_id is not None:
+        state = balda_game.STATE_MANAGER.find_by_player(user_id)
+        if state:
+            if "balda" not in REGISTERED_GAMES:
+                balda_game.register_handlers(APPLICATION)
+                REGISTERED_GAMES.add("balda")
+            await balda_game.quit_cmd(update, context)
+            return
         for game in grebeshok_game.ACTIVE_GAMES.values():
             if user_id in game.players:
                 await grebeshok_game.quit_cmd(update, context)
@@ -156,6 +170,7 @@ async def on_startup() -> None:
     balda_game.BOT_USERNAME = bot_username
     APPLICATION.add_handler(CommandHandler("start", start))
     APPLICATION.add_handler(CommandHandler("quit", quit_command, block=False))
+    APPLICATION.add_handler(CommandHandler("exit", quit_command, block=False))
     APPLICATION.add_handler(CallbackQueryHandler(choose_game, pattern="^game_"))
     await APPLICATION.initialize()
     await APPLICATION.start()

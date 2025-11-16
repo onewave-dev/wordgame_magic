@@ -230,6 +230,43 @@ def test_balda_start_button_prompts_letter_choice():
     asyncio.run(run())
 
 
+def test_quit_command_routes_to_balda():
+    async def run():
+        balda_game.STATE_MANAGER.reset()
+        chat_id = 4242
+        user_id = 5151
+        message = DummyMessage(chat_id, user_id, text="/quit")
+        update = SimpleNamespace(
+            effective_message=message,
+            effective_chat=message.chat,
+            effective_user=SimpleNamespace(id=user_id),
+        )
+        context = SimpleNamespace()
+        state = balda_game.STATE_MANAGER.create_lobby(host_id=user_id, chat_id=chat_id)
+        state.players[user_id] = balda_game.PlayerState(user_id=user_id, name="Host", is_host=True)
+        state.players_active = [user_id]
+        balda_game.STATE_MANAGER.save(state)
+        registered_snapshot = root_app.REGISTERED_GAMES.copy()
+        root_app.REGISTERED_GAMES.add("balda")
+        greb_snapshot = greb_app.ACTIVE_GAMES.copy()
+        greb_app.ACTIVE_GAMES.clear()
+        compose_get_game = root_app.compose_game.get_game
+        root_app.compose_game.get_game = lambda *_: None
+        try:
+            with patch.object(balda_game, "quit_cmd", AsyncMock()) as quit_mock:
+                await root_app.quit_command(update, context)
+                quit_mock.assert_awaited_once()
+        finally:
+            root_app.compose_game.get_game = compose_get_game
+            greb_app.ACTIVE_GAMES.clear()
+            greb_app.ACTIVE_GAMES.update(greb_snapshot)
+            root_app.REGISTERED_GAMES.clear()
+            root_app.REGISTERED_GAMES.update(registered_snapshot)
+            balda_game.STATE_MANAGER.reset()
+
+    asyncio.run(run())
+
+
 def test_balda_manual_letter_requires_single_cyrillic():
     async def run():
         balda_game.STATE_MANAGER.reset()

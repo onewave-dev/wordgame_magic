@@ -62,6 +62,14 @@ class GameStateManager:
 
         return join_code in self._join_codes
 
+    def find_by_player(self, player_id: int) -> Optional[GameState]:
+        """Return the first game that contains the provided player id."""
+
+        for state in self._active_games.values():
+            if player_id in state.players:
+                return state
+        return None
+
     # Mutation helpers -------------------------------------------------
     def save(self, state: GameState) -> GameState:
         """Persist changes to an existing game state."""

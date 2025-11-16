@@ -24,7 +24,7 @@ from telegram.ext import ApplicationHandlerStop, ContextTypes, filters
 from ..services import collect_game_stats
 from ..state import GameState, PlayerState
 from ..state.manager import STATE_MANAGER
-from .gameplay import start_first_turn, update_board_image
+from .gameplay import resign_player, start_first_turn, update_board_image
 
 MIN_PLAYERS = 2
 MAX_PLAYERS = 5
@@ -383,6 +383,42 @@ async def score_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await message.reply_text("Для этого чата нет активного лобби «Балда». Используйте /newgame.")
         return
     await message.reply_text(_format_score(state), parse_mode="HTML")
+
+
+async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    chat = update.effective_chat
+    user = update.effective_user
+    if not message or not user:
+        return
+    user_id = user.id
+    chat_id = chat.id if chat else None
+    thread_id = message.message_thread_id or None
+    state: GameState | None = None
+    if chat_id is not None:
+        state = STATE_MANAGER.get_by_chat(chat_id, thread_id)
+    if not state:
+        state = STATE_MANAGER.find_by_player(user_id)
+    if not state:
+        await message.reply_text(
+            "Для этого чата нет активной игры «Балда». Используйте /newgame, чтобы создать лобби.",
+        )
+        return
+    player = state.players.get(user_id)
+    if not player:
+        await message.reply_text("Вы не участвуете в этой игре «Балда».")
+        return
+    if state.has_started:
+        if player.is_eliminated:
+            await message.reply_text("Вы уже выбыли и наблюдаете за текущей игрой.")
+            return
+        await resign_player(state, context, user_id)
+        await message.reply_text(
+            "Вы вышли из игры «Балда». Это засчитано как поражение.",
+        )
+        return
+    await _handle_lobby_exit(state, player, update, context)
+    await message.reply_text("Вы покинули лобби «Балда».")
 
 
 async def invite_link_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -761,3 +797,85 @@ async def _finalize_initial_letter(
         )
     await update_board_image(state, context)
     await start_first_turn(state, context)
+
+
+async def _announce_lobby_departure(
+    state: GameState, context: ContextTypes.DEFAULT_TYPE, player: PlayerState
+) -> None:
+    if not context.bot or not state.chat_id:
+        return
+    active_count = sum(
+        1
+        for player_id in state.players_active
+        if (candidate := state.players.get(player_id)) and not candidate.is_eliminated
+    )
+    name = html.escape(player.name)
+    await context.bot.send_message(
+        state.chat_id,
+        (
+            f"🚪 {name} покинул лобби «Балда»."
+            f" Активных игроков осталось: {active_count}."
+        ),
+        parse_mode="HTML",
+        message_thread_id=state.thread_id,
+    )
+
+
+def _reassign_host_if_needed(state: GameState) -> None:
+    if state.host_id in state.players:
+        return
+    new_host_id: Optional[int] = None
+    for player_id in state.players_active:
+        if player_id in state.players:
+            new_host_id = player_id
+            break
+    if new_host_id is None and state.players:
+        new_host_id = next(iter(state.players.keys()))
+    for player in state.players.values():
+        player.is_host = False
+    if new_host_id is not None:
+        state.host_id = new_host_id
+        host = state.players.get(new_host_id)
+        if host:
+            host.is_host = True
+
+
+async def _notify_lobby_closed(
+    state: GameState, context: ContextTypes.DEFAULT_TYPE, player: PlayerState
+) -> None:
+    if not context.bot or not state.chat_id:
+        return
+    name = html.escape(player.name)
+    await context.bot.send_message(
+        state.chat_id,
+        (
+            f"🚪 {name} покинул лобби, и больше не осталось игроков."
+            " Лобби закрыто."
+        ),
+        parse_mode="HTML",
+        message_thread_id=state.thread_id,
+    )
+
+
+async def _handle_lobby_exit(
+    state: GameState,
+    player: PlayerState,
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    release_letter_request(player.user_id)
+    state.players.pop(player.user_id, None)
+    state.players_active = [pid for pid in state.players_active if pid != player.user_id]
+    state.players_out = [pid for pid in state.players_out if pid != player.user_id]
+    state.has_passed.pop(player.user_id, None)
+    if not state.players_active:
+        await _hide_invite_keyboard(state, context)
+        await _notify_lobby_closed(state, context, player)
+        STATE_MANAGER.drop_game(state.game_id)
+        return
+    if state.host_id == player.user_id:
+        _reassign_host_if_needed(state)
+    STATE_MANAGER.save(state)
+    await _announce_lobby_departure(state, context, player)
+    await _publish_lobby(update, context, state)
+    await _sync_invite_keyboard(state, context)

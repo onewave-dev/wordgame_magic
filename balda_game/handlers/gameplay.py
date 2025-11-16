@@ -474,6 +474,28 @@ async def _advance_turn(state: GameState, context: ContextTypes.DEFAULT_TYPE) ->
     await _prompt_direction_choice(state, next_player, context)
 
 
+async def resign_player(
+    state: GameState, context: ContextTypes.DEFAULT_TYPE, player_id: int
+) -> None:
+    """Handle a voluntary exit from an active game (counts as a loss)."""
+
+    player = state.players.get(player_id)
+    if not player or player.is_eliminated:
+        return
+    if state.current_player == player_id:
+        _cancel_turn_jobs(state)
+    _clear_pending_move(player_id)
+    if context.bot:
+        name = html.escape(player.name)
+        await context.bot.send_message(
+            state.chat_id,
+            f"🚪 {name} покинул игру — засчитано поражение.",
+            parse_mode="HTML",
+            message_thread_id=state.thread_id,
+        )
+    await eliminate_player(state, context, player_id)
+
+
 async def finish_game(
     state: GameState, context: ContextTypes.DEFAULT_TYPE, winner: PlayerState
 ) -> None:
@@ -629,6 +651,7 @@ __all__ = [
     "direction_choice_callback",
     "handle_move_submission",
     "pass_turn_callback",
+    "resign_player",
     "start_first_turn",
     "update_board_image",
 ]

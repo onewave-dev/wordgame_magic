@@ -1,6 +1,6 @@
 """Balda game scaffolding package."""
 
-from .handlers import newgame, register_handlers, reset_for_chat, start_cmd
+from .handlers import newgame, register_handlers, reset_for_chat, start_cmd, quit_cmd
 from .state import GameState, PlayerState, TurnRecord
 from .state.manager import STATE_MANAGER
 
@@ -21,6 +21,7 @@ __all__ = [
     "start_cmd",
     "newgame",
     "reset_for_chat",
+    "quit_cmd",
     "get_game",
     "STATE_MANAGER",
 ]
