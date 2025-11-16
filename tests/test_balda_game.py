@@ -12,6 +12,7 @@ import pytest
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from balda_game.handlers import gameplay
+from balda_game.handlers import lobby
 from balda_game.services import GameStats
 from balda_game.state import GameState, PlayerState, TurnRecord
 from balda_game.state.manager import GameStateManager, STATE_MANAGER
@@ -226,3 +227,98 @@ def test_state_manager_persists_games_between_instances(tmp_path: Path) -> None:
     assert restored.has_passed[10] is True
     assert restored_manager.get_by_chat(state.chat_id, state.thread_id) is restored
     assert restored_manager.get_by_join_code(join_code) is restored
+
+
+def test_state_manager_finds_game_by_player() -> None:
+    state = STATE_MANAGER.create_lobby(host_id=1, chat_id=10)
+    player = PlayerState(user_id=1, name="Alice", is_host=True)
+    opponent = PlayerState(user_id=2, name="Bob")
+    state.players = {1: player, 2: opponent}
+    state.players_active = [1, 2]
+    STATE_MANAGER.save(state)
+
+    assert STATE_MANAGER.find_by_player(1) is state
+    assert STATE_MANAGER.find_by_player(2) is state
+    assert STATE_MANAGER.find_by_player(9999) is None
+
+
+@pytest.mark.anyio
+async def test_quit_cmd_removes_player_from_lobby(monkeypatch: pytest.MonkeyPatch) -> None:
+    state = STATE_MANAGER.create_lobby(host_id=1, chat_id=50)
+    host = PlayerState(user_id=1, name="Host", is_host=True)
+    guest = PlayerState(user_id=2, name="Guest")
+    state.players = {1: host, 2: guest}
+    state.players_active = [1, 2]
+    STATE_MANAGER.save(state)
+
+    publish = AsyncMock()
+    sync_keyboard = AsyncMock()
+    monkeypatch.setattr(lobby, "_publish_lobby", publish)
+    monkeypatch.setattr(lobby, "_sync_invite_keyboard", sync_keyboard)
+
+    bot = SimpleNamespace(send_message=AsyncMock())
+    message = SimpleNamespace(
+        reply_text=AsyncMock(),
+        message_thread_id=None,
+        chat_id=state.chat_id,
+        text="/quit",
+    )
+    update = SimpleNamespace(
+        effective_message=message,
+        effective_user=SimpleNamespace(id=1),
+        effective_chat=SimpleNamespace(id=state.chat_id),
+    )
+    context = SimpleNamespace(bot=bot, user_data={}, application=None)
+
+    await lobby.quit_cmd(update, context)
+
+    assert 1 not in state.players
+    assert state.players_active == [2]
+    assert state.players[2].is_host is True
+    publish.assert_awaited()
+    sync_keyboard.assert_awaited()
+    assert message.reply_text.await_args_list[0].args[0].startswith("Вы покинули лобби")
+    sent_texts = [call.args[1] for call in bot.send_message.await_args_list]
+    assert any("покинул" in text for text in sent_texts)
+
+
+@pytest.mark.anyio
+async def test_quit_cmd_eliminates_active_player(monkeypatch: pytest.MonkeyPatch) -> None:
+    state = STATE_MANAGER.create_lobby(host_id=1, chat_id=60)
+    host = PlayerState(user_id=1, name="Host", is_host=True)
+    rival = PlayerState(user_id=2, name="Rival")
+    state.players = {1: host, 2: rival}
+    state.players_active = [1, 2]
+    state.has_started = True
+    state.base_letter = "к"
+    state.sequence = "к"
+    state.current_player = 1
+    timeout_job = _DummyJob()
+    state.timer_job = {"timeout": timeout_job}
+    STATE_MANAGER.save(state)
+
+    eliminate = AsyncMock()
+    monkeypatch.setattr(lobby, "eliminate_player", eliminate)
+
+    bot = SimpleNamespace(send_message=AsyncMock())
+    message = SimpleNamespace(
+        reply_text=AsyncMock(),
+        message_thread_id=None,
+        chat_id=999,
+        text="/quit",
+    )
+    update = SimpleNamespace(
+        effective_message=message,
+        effective_user=SimpleNamespace(id=1),
+        effective_chat=SimpleNamespace(id=999),
+    )
+    context = SimpleNamespace(bot=bot, user_data={}, application=None)
+
+    await lobby.quit_cmd(update, context)
+
+    assert state.timer_job == {}
+    assert timeout_job.removed or timeout_job.cancelled
+    eliminate.assert_awaited_once_with(state, context, 1)
+    assert message.reply_text.await_args_list[-1].args[0].startswith("Вы покинули игру")
+    sent_texts = [call.args[1] for call in bot.send_message.await_args_list]
+    assert any("покинул" in text for text in sent_texts)

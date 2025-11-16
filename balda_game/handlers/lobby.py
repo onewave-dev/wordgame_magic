@@ -24,7 +24,7 @@ from telegram.ext import ApplicationHandlerStop, ContextTypes, filters
 from ..services import collect_game_stats
 from ..state import GameState, PlayerState
 from ..state.manager import STATE_MANAGER
-from .gameplay import start_first_turn, update_board_image
+from .gameplay import eliminate_player, start_first_turn, update_board_image
 
 MIN_PLAYERS = 2
 MAX_PLAYERS = 5
@@ -383,6 +383,148 @@ async def score_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await message.reply_text("Для этого чата нет активного лобби «Балда». Используйте /newgame.")
         return
     await message.reply_text(_format_score(state), parse_mode="HTML")
+
+
+def _assign_new_host(state: GameState, *, departing_id: int) -> Optional[PlayerState]:
+    """Choose a replacement host when the current one leaves the lobby."""
+
+    if state.host_id != departing_id:
+        return None
+    candidate_id: Optional[int] = None
+    for player_id in state.players_active:
+        if player_id == departing_id:
+            continue
+        player = state.players.get(player_id)
+        if player and not player.is_eliminated:
+            candidate_id = player_id
+            break
+    if candidate_id is None:
+        return None
+    for player in state.players.values():
+        player.is_host = False
+    state.host_id = candidate_id
+    player = state.players.get(candidate_id)
+    if player:
+        player.is_host = True
+    return player
+
+
+async def _announce_departure(
+    state: GameState, context: ContextTypes.DEFAULT_TYPE, text: str
+) -> None:
+    if not context.bot or not state.chat_id:
+        return
+    await context.bot.send_message(
+        state.chat_id,
+        text,
+        parse_mode="HTML",
+        message_thread_id=state.thread_id,
+    )
+
+
+async def _handle_lobby_departure(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    state: GameState,
+    player: PlayerState,
+) -> None:
+    message = update.effective_message
+    if not message:
+        return
+    user_id = player.user_id
+    state.players.pop(user_id, None)
+    if user_id in state.players_active:
+        state.players_active.remove(user_id)
+    state.has_passed.pop(user_id, None)
+    if user_id in state.players_out:
+        state.players_out.remove(user_id)
+    await message.reply_text("Вы покинули лобби «Балда».")
+    if not state.players_active:
+        await _hide_invite_keyboard(state, context)
+        await _announce_departure(
+            state,
+            context,
+            f"🚪 {html.escape(player.name)} закрыл(а) лобби «Балда».",
+        )
+        STATE_MANAGER.drop_game(state.game_id)
+        return
+    new_host = _assign_new_host(state, departing_id=user_id)
+    STATE_MANAGER.save(state)
+    host_note = ""
+    if new_host:
+        host_note = f" Новый хост — <b>{html.escape(new_host.name)}</b>."
+    await _announce_departure(
+        state,
+        context,
+        f"🚪 {html.escape(player.name)} покинул(а) лобби «Балда».{host_note}",
+    )
+    await _publish_lobby(update, context, state)
+    await _sync_invite_keyboard(state, context)
+
+
+async def _handle_active_forfeit(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    state: GameState,
+    player: PlayerState,
+) -> None:
+    message = update.effective_message
+    if not message:
+        return
+    user_id = player.user_id
+    if state.current_player == user_id:
+        state.reset_timer()
+    if state.host_id == user_id and not state.base_letter:
+        new_host = _assign_new_host(state, departing_id=user_id)
+        if new_host:
+            STATE_MANAGER.save(state)
+    await message.reply_text("Вы покинули игру «Балда». Это засчитано как поражение.")
+    await _announce_departure(
+        state,
+        context,
+        f"❌ {html.escape(player.name)} покинул(а) игру и считается проигравшим.",
+    )
+    await eliminate_player(state, context, user_id)
+    if (not state.base_letter) and STATE_MANAGER.get_by_id(state.game_id):
+        await _send_letter_choice_prompt(state, context)
+
+
+async def quit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    chat = update.effective_chat
+    user = update.effective_user
+    if not message or not user:
+        return
+    user_id = user.id
+    if user_id in AWAITING_NAME_USERS:
+        release_name_request(context, user_id)
+        await message.reply_text(
+            "Заявка на участие в «Балде» отменена. Можно начать заново командой /newgame."
+        )
+        return
+    release_letter_request(user_id)
+    thread_id = message.message_thread_id or None
+    state: Optional[GameState] = None
+    if chat:
+        state = STATE_MANAGER.get_by_chat(chat.id, thread_id)
+        if state and user_id not in state.players:
+            state = None
+    if not state:
+        state = STATE_MANAGER.find_by_player(user_id)
+    if not state:
+        await message.reply_text("Вы не участвуете в игре «Балда». Используйте /newgame, чтобы начать.")
+        return
+    player = state.players.get(user_id)
+    if not player:
+        await message.reply_text("Вы не участвуете в игре «Балда». Используйте /join, чтобы присоединиться.")
+        return
+    if not state.has_started:
+        await _handle_lobby_departure(update, context, state, player)
+        return
+    if player.is_eliminated:
+        await message.reply_text("Вы уже наблюдаете за текущей партией.")
+        return
+    await _handle_active_forfeit(update, context, state, player)
 
 
 async def invite_link_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

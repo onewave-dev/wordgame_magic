@@ -31,6 +31,7 @@ from .lobby import (
     join_cmd,
     letter_choice_callback,
     newgame,
+    quit_cmd,
     release_letter_request,
     release_name_request,
     score_cmd,
@@ -59,6 +60,7 @@ def register_handlers(application: Optional[Application]) -> None:
     application.add_handler(CommandHandler("join", join_cmd))
     application.add_handler(CommandHandler("help", help_cmd, block=False))
     application.add_handler(CommandHandler("score", score_cmd, block=False))
+    application.add_handler(CommandHandler("exit", quit_cmd, block=False))
     application.add_handler(MessageHandler(filters.COMMAND, awaiting_name_guard), group=-1)
     application.add_handler(
         MessageHandler(
