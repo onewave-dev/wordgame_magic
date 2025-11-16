@@ -14,6 +14,8 @@ from compose_word_game import word_game_app as app
 from grebeshok_game import grebeshok_app as greb_app
 from telegram.ext import Application, ApplicationHandlerStop
 
+import pytest
+
 
 compose_game = app
 
@@ -51,6 +53,13 @@ class DummyCallbackQuery:
 
     async def edit_message_text(self, text: str, **kwargs):
         self.edited_texts.append((text, kwargs))
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    """Limit AnyIO-powered tests in this module to asyncio."""
+
+    return "asyncio"
 
 
 def test_start_menu_contains_balda_button():
@@ -252,6 +261,45 @@ def test_balda_manual_letter_requires_single_cyrillic():
         assert texts[1] == "Game started"
 
     asyncio.run(run())
+
+
+@pytest.mark.anyio
+async def test_balda_join_announces_new_player():
+    balda_game.STATE_MANAGER.reset()
+    try:
+        host_id = 5002
+        chat_id = 7002
+        state = balda_game.STATE_MANAGER.create_lobby(host_id, chat_id)
+        balda_game.STATE_MANAGER.ensure_join_code(state)
+        state.players[host_id] = balda_game.PlayerState(user_id=host_id, name="Хост", is_host=True)
+        state.players_active = [host_id]
+        state.thread_id = 77
+        join_code = state.join_code or ""
+
+        message = DummyMessage(chat_id=8001, user_id=9001, text="/start")
+        update = SimpleNamespace(
+            effective_message=message,
+            effective_user=SimpleNamespace(id=9001, full_name="Новый Игрок", username=""),
+        )
+        bot = SimpleNamespace(send_message=AsyncMock(), edit_message_text=AsyncMock())
+        context = SimpleNamespace(bot=bot, user_data={})
+
+        with (
+            patch.object(balda_lobby, "_publish_lobby", AsyncMock()),
+            patch.object(balda_lobby, "_sync_invite_keyboard", AsyncMock()),
+        ):
+            await balda_lobby._join_lobby(update, context, join_code)
+
+        assert bot.send_message.await_count == 1
+        args, kwargs = bot.send_message.await_args_list[0]
+        assert args[0] == chat_id
+        text = args[1]
+        assert "Новый Игрок" in text
+        assert "Старт" in text
+        assert kwargs["parse_mode"] == "HTML"
+        assert kwargs["message_thread_id"] == state.thread_id
+    finally:
+        balda_game.STATE_MANAGER.reset()
 
 
 def test_handle_name_uses_application_storage_when_user_data_empty():
