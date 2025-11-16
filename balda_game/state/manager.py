@@ -1,11 +1,13 @@
-"""In-memory CRUD manager for Balda game state."""
+"""Persistence-aware CRUD manager for Balda game state."""
 
 from __future__ import annotations
 
+import logging
 from secrets import token_urlsafe
 from typing import Dict, Optional, Tuple
 
 from .models import GameState
+from .storage import DEFAULT_STATE_PATH, StateStorage
 
 GameKey = Tuple[int, int]
 
@@ -13,10 +15,13 @@ GameKey = Tuple[int, int]
 class GameStateManager:
     """Utility that stores and retrieves Balda game sessions."""
 
-    def __init__(self) -> None:
+    def __init__(self, storage: Optional[StateStorage] = None) -> None:
+        self._logger = logging.getLogger(__name__)
+        self._storage = storage or StateStorage(DEFAULT_STATE_PATH)
         self._active_games: Dict[str, GameState] = {}
         self._chat_index: Dict[GameKey, str] = {}
         self._join_codes: Dict[str, str] = {}
+        self._load_from_disk()
 
     # Creation helpers -------------------------------------------------
     def create_lobby(self, host_id: int, chat_id: int, thread_id: Optional[int] = None) -> GameState:
@@ -26,6 +31,7 @@ class GameStateManager:
         state = GameState(game_id=game_id, host_id=host_id, chat_id=chat_id, thread_id=thread_id)
         self._active_games[game_id] = state
         self._chat_index[(chat_id, thread_id or 0)] = game_id
+        self._persist()
         return state
 
     def ensure_join_code(self, state: GameState) -> str:
@@ -36,6 +42,7 @@ class GameStateManager:
         code = token_urlsafe(4)
         self._join_codes[code] = state.game_id
         state.join_code = code
+        self._persist()
         return code
 
     # Lookup helpers ---------------------------------------------------
@@ -67,6 +74,7 @@ class GameStateManager:
         """Persist changes to an existing game state."""
 
         self._active_games[state.game_id] = state
+        self._persist()
         return state
 
     def reset_chat(self, chat_id: int) -> None:
@@ -83,6 +91,7 @@ class GameStateManager:
             stale_codes = [code for code, gid in self._join_codes.items() if gid == game_id]
             for code in stale_codes:
                 self._join_codes.pop(code, None)
+        self._persist()
 
     def drop_game(self, game_id: str) -> None:
         """Remove a single game and its join codes."""
@@ -96,6 +105,7 @@ class GameStateManager:
         stale_codes = [code for code, gid in self._join_codes.items() if gid == game_id]
         for code in stale_codes:
             self._join_codes.pop(code, None)
+        self._persist()
 
     def reset(self) -> None:
         """Clear all stored data (used in tests)."""
@@ -103,6 +113,28 @@ class GameStateManager:
         self._active_games.clear()
         self._chat_index.clear()
         self._join_codes.clear()
+        self._storage.clear()
+
+    # Internal helpers -------------------------------------------------
+    def _persist(self) -> None:
+        """Write the in-memory state to disk, logging any failures."""
+
+        try:
+            self._storage.dump(self._active_games, self._chat_index, self._join_codes)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            self._logger.exception("Failed to persist Balda state: %s", exc)
+
+    def _load_from_disk(self) -> None:
+        """Restore previously saved games when the manager initializes."""
+
+        try:
+            games, chat_index, join_codes = self._storage.load()
+        except Exception as exc:  # pragma: no cover - defensive logging
+            self._logger.exception("Failed to load Balda state: %s", exc)
+            return
+        self._active_games = games
+        self._chat_index = chat_index
+        self._join_codes = join_codes
 
 
 STATE_MANAGER = GameStateManager()

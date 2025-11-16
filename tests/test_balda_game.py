@@ -14,7 +14,8 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from balda_game.handlers import gameplay
 from balda_game.services import GameStats
 from balda_game.state import GameState, PlayerState, TurnRecord
-from balda_game.state.manager import STATE_MANAGER
+from balda_game.state.manager import GameStateManager, STATE_MANAGER
+from balda_game.state.storage import StateStorage
 
 
 class _DummyJob:
@@ -185,3 +186,43 @@ async def test_finish_game_announces_winner_and_drops_state(monkeypatch: pytest.
     assert "Победитель" in bot.send_message.await_args_list[0].args[1]
     assert bot.send_message.await_args_list[1].args[1] == "stats"
     assert STATE_MANAGER.get_by_id(state.game_id) is None
+
+
+def test_state_manager_persists_games_between_instances(tmp_path: Path) -> None:
+    storage_path = tmp_path / "state.json"
+    storage = StateStorage(storage_path)
+    manager = GameStateManager(storage=storage)
+
+    state = manager.create_lobby(host_id=10, chat_id=777, thread_id=5)
+    state.base_letter = "р"
+    state.sequence = "ра"
+    state.current_player = 10
+    state.direction = "right"
+    state.players = {
+        10: PlayerState(user_id=10, name="Alice", is_host=True),
+        11: PlayerState(user_id=11, name="Bob"),
+        12: PlayerState(user_id=12, name="Cara", is_eliminated=True),
+    }
+    state.players_active = [10, 11]
+    state.players_out = [12]
+    state.has_passed = {10: True}
+    state.invited_users = {99}
+    state.has_started = True
+    turn = TurnRecord(player_id=11, letter="к", word="рака", direction="right")
+    state.add_turn(turn)
+    join_code = manager.ensure_join_code(state)
+    manager.save(state)
+
+    restored_manager = GameStateManager(storage=storage)
+    restored = restored_manager.get_by_id(state.game_id)
+
+    assert restored is not None
+    assert restored.sequence == state.sequence
+    assert restored.players_active == [10, 11]
+    assert restored.players_out == [12]
+    assert restored.players[12].is_eliminated is True
+    assert restored.words_used[-1].word == "рака"
+    assert restored.invited_users == {99}
+    assert restored.has_passed[10] is True
+    assert restored_manager.get_by_chat(state.chat_id, state.thread_id) is restored
+    assert restored_manager.get_by_join_code(join_code) is restored
