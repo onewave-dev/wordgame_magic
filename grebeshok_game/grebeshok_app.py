@@ -470,11 +470,15 @@ def clear_awaiting_grebeshok_name(
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Entry point for ``/start`` command."""
 
-    if context.args and context.args[0].startswith("join_"):
-        code = context.args[0][5:]
-        context.args = [code]
-        await join_cmd(update, context)
-        return
+    if context.args:
+        arg = context.args[0]
+        if arg.startswith("join_"):
+            context.args = [arg[5:]]
+            await join_cmd(update, context)
+            return
+        if arg in JOIN_CODES:
+            await join_cmd(update, context)
+            return
 
     await newgame(update, context)
 
@@ -531,7 +535,7 @@ async def invite_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             return
     code = ensure_invite_code(game, context)
-    link = f"https://t.me/{BOT_USERNAME}?start=join_{code}"
+    link = f"https://t.me/{BOT_USERNAME}?start={code}"
     await reply_game_message(
         message,
         context,
@@ -550,7 +554,7 @@ async def users_shared_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     if not game:
         return
     code = ensure_invite_code(game, context)
-    link = f"https://t.me/{BOT_USERNAME}?start=join_{code}"
+    link = f"https://t.me/{BOT_USERNAME}?start={code}"
 
     delivered: List[str] = []
     permanent_failures: List[Tuple[str, str]] = []
@@ -573,13 +577,24 @@ async def users_shared_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
     for u in shared.users:
         user_label = format_shared_user(u)
+        user_id = getattr(u, "user_id", None)
+        if not user_id:
+            reason = "Telegram не передал ID пользователя — он ещё не открывал этого бота."
+            logger.warning("Cannot deliver invite to %s: %s", user_label, reason)
+            permanent_failures.append((user_label, reason))
+            continue
         try:
-            await context.bot.send_message(u.user_id, f"Приглашение в игру: {link}")
-            game.invited_users.add(u.user_id)
+            await context.bot.send_message(user_id, f"Приглашение в игру: {link}")
+            game.invited_users.add(user_id)
             delivered.append(user_label)
         except (Forbidden, BadRequest) as exc:
             logger.warning("Failed to deliver invite to %s: %s", user_label, exc)
-            permanent_failures.append((user_label, str(exc)))
+            reason = str(exc)
+            if isinstance(exc, Forbidden) and "initiate conversation" in reason:
+                reason = (
+                    "Telegram запрещает боту писать первым. Попросите игрока открыть бота по ссылке."
+                )
+            permanent_failures.append((user_label, reason))
         except TelegramError as exc:
             logger.warning("Temporary error delivering invite to %s: %s", user_label, exc)
             transient_failures.append((user_label, str(exc)))
@@ -1654,7 +1669,10 @@ def register_handlers(application: Application, include_start: bool = False) -> 
         group=-1,
     )
     application.add_handler(
-        MessageHandler(filters.Regex("^Создать ссылку$"), invite_link),
+        MessageHandler(
+            filters.TEXT & (~filters.COMMAND) & filters.Regex("^Создать ссылку$"),
+            invite_link,
+        ),
         group=0,
     )
     application.add_handler(

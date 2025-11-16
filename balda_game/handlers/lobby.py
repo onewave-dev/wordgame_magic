@@ -4,10 +4,21 @@ from __future__ import annotations
 
 import html
 import random
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
-from telegram import ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, Message, Update, User
-from telegram.error import TelegramError
+from telegram import (
+    ForceReply,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    KeyboardButtonRequestUsers,
+    Message,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+    Update,
+    User,
+)
+from telegram.error import BadRequest, Forbidden, TelegramError
 from telegram.ext import ApplicationHandlerStop, ContextTypes, filters
 
 from ..services import collect_game_stats
@@ -24,7 +35,8 @@ HELP_TEXT = (
     "<b>Балда — краткие правила</b>\n"
     "1. Создайте лобби командой /newgame или кнопкой в меню игры.\n"
     "2. Представьтесь — это имя увидят другие участники и в итоговой таблице.\n"
-    "3. Пригласите друзей через код /join или ссылку с кнопки \"Пригласить игроков\".\n"
+    "3. Пригласите друзей кнопками «Пригласить из контактов» или «Создать ссылку».\n"
+    "   Код для команды /join всегда указан в сообщении лобби.\n"
     "4. Как только в лобби будет минимум 2 игрока (максимум — 5), жмите \"Старт\".\n"
     "5. Каждый ход игрок добавляет одну букву слева или справа от текущей цепочки\n"
     "   и называет слово, в котором есть новая цепочка.\n"
@@ -41,6 +53,7 @@ HELP_TEXT = (
 
 AWAITING_NAME_USERS: set[int] = set()
 AWAITING_LETTER_USERS: Dict[int, str] = {}
+INVISIBLE_MESSAGE = "\u2063"
 
 LETTER_EXCLUDED = {"ъ", "ё", "ы"}
 CYRILLIC_ALPHABET = tuple(chr(code) for code in range(ord("а"), ord("я") + 1)) + ("ё",)
@@ -111,6 +124,65 @@ def release_letter_request(user_id: Optional[int]) -> None:
     if not user_id:
         return
     AWAITING_LETTER_USERS.pop(user_id, None)
+
+
+async def _show_invite_keyboard(state: GameState, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Display the shared invite keyboard in the host chat."""
+
+    if state.invite_keyboard_visible or not context.bot or not state.chat_id:
+        return
+    keyboard = ReplyKeyboardMarkup(
+        [
+            [
+                KeyboardButton(
+                    text="Пригласить из контактов",
+                    request_users=KeyboardButtonRequestUsers(request_id=1),
+                ),
+                KeyboardButton(text="Создать ссылку"),
+            ]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+    await context.bot.send_message(
+        state.chat_id,
+        "Игра создана. Пригласите участников.",
+        message_thread_id=state.thread_id,
+    )
+    await context.bot.send_message(
+        state.chat_id,
+        "Выберите способ приглашения:",
+        reply_markup=keyboard,
+        message_thread_id=state.thread_id,
+    )
+    state.invite_keyboard_visible = True
+
+
+async def _hide_invite_keyboard(state: GameState, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Remove the invite keyboard without leaving a message behind."""
+
+    if not state.invite_keyboard_visible or not context.bot or not state.chat_id:
+        return
+    msg = await context.bot.send_message(
+        state.chat_id,
+        INVISIBLE_MESSAGE,
+        reply_markup=ReplyKeyboardRemove(),
+        message_thread_id=state.thread_id,
+    )
+    try:
+        await msg.delete()
+    except TelegramError:
+        pass
+    state.invite_keyboard_visible = False
+
+
+async def _sync_invite_keyboard(state: GameState, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show or hide the invite keyboard based on lobby readiness."""
+
+    if state.has_started or len(state.players) >= MIN_PLAYERS:
+        await _hide_invite_keyboard(state, context)
+    else:
+        await _show_invite_keyboard(state, context)
 
 
 async def _ensure_player_name(
@@ -206,6 +278,7 @@ async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     state.players_active = [user.id]
     state.has_started = False
     await _publish_lobby(update, context, state, fresh_start=True)
+    await _sync_invite_keyboard(state, context)
 
 
 async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -251,6 +324,7 @@ async def _join_lobby(update: Update, context: ContextTypes.DEFAULT_TYPE, join_c
         "Вы присоединились к лобби «Балда». Дождитесь команды старта от хоста.",
     )
     await _publish_lobby(update, context, state)
+    await _sync_invite_keyboard(state, context)
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -272,26 +346,109 @@ async def score_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await message.reply_text(_format_score(state), parse_mode="HTML")
 
 
-async def invite_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if not query:
+async def invite_link_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    chat = update.effective_chat
+    if not message or not chat:
         return
-    await query.answer()
-    data = query.data or ""
-    _, _, game_id = data.partition(":invite:")
-    state = STATE_MANAGER.get_by_id(game_id)
+    thread_id = message.message_thread_id or None
+    state = STATE_MANAGER.get_by_chat(chat.id, thread_id)
     if not state:
+        await message.reply_text("Игра не найдена, начните заново командой /start")
         return
     code = STATE_MANAGER.ensure_join_code(state)
-    bot_username = context.bot.username if context.bot else "wordgamesbot"
+    bot = context.bot
+    bot_username = (getattr(bot, "username", None) or "wordgamesbot").lstrip("@")
     link = f"https://t.me/{bot_username}?start={code}"
-    text = (
-        "Приглашение в лобби «Балда»:\n"
-        f"• Код: <code>{html.escape(code)}</code>\n"
-        f"• Ссылка: {html.escape(link)}\n\n"
-        "Отправьте ссылку друзьям или поделитесь кодом для команды /join."
-    )
-    await query.message.reply_text(text, parse_mode="HTML", disable_web_page_preview=True)
+    await message.reply_text(f"Ссылка приглашения: {link}")
+
+
+async def users_shared_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    chat = update.effective_chat
+    if not message or not chat or not message.users_shared:
+        return
+    thread_id = message.message_thread_id or None
+    state = STATE_MANAGER.get_by_chat(chat.id, thread_id)
+    if not state:
+        return
+    bot = context.bot
+    if not bot:
+        return
+    code = STATE_MANAGER.ensure_join_code(state)
+    bot_username = (getattr(bot, "username", None) or "wordgamesbot").lstrip("@")
+    link = f"https://t.me/{bot_username}?start={code}"
+
+    delivered: List[str] = []
+    permanent_failures: List[Tuple[str, str]] = []
+    transient_failures: List[Tuple[str, str]] = []
+
+    def format_shared_user(shared_user: object) -> str:
+        first_name = getattr(shared_user, "first_name", "") or ""
+        last_name = getattr(shared_user, "last_name", "") or ""
+        username = getattr(shared_user, "username", "") or ""
+        user_id = getattr(shared_user, "user_id", None)
+        name_parts = " ".join(part for part in [first_name.strip(), last_name.strip()] if part)
+        if username:
+            if name_parts:
+                name_parts = f"{name_parts} (@{username})"
+            else:
+                name_parts = f"@{username}"
+        if not name_parts:
+            name_parts = f"ID {user_id}" if user_id is not None else "неизвестный пользователь"
+        return name_parts
+
+    for shared_user in message.users_shared.users:
+        user_label = format_shared_user(shared_user)
+        user_id = getattr(shared_user, "user_id", None)
+        if not user_id:
+            reason = "Telegram не передал ID пользователя — он ещё не открывал этого бота."
+            permanent_failures.append((user_label, reason))
+            continue
+        try:
+            await bot.send_message(user_id, f"Приглашение в игру: {link}")
+            state.invited_users.add(user_id)
+            delivered.append(user_label)
+        except (Forbidden, BadRequest) as exc:
+            reason = str(exc)
+            if isinstance(exc, Forbidden) and "initiate conversation" in reason:
+                reason = (
+                    "Telegram запрещает боту писать первым. Попросите игрока открыть бота по ссылке."
+                )
+            permanent_failures.append((user_label, reason))
+        except TelegramError as exc:
+            transient_failures.append((user_label, str(exc)))
+        except Exception as exc:  # pragma: no cover - safeguard for unexpected errors
+            transient_failures.append((user_label, str(exc)))
+
+    response_lines: List[str] = []
+    if delivered:
+        response_lines.append("✅ Приглашения доставлены: " + ", ".join(delivered))
+
+    if permanent_failures or transient_failures:
+        if permanent_failures:
+            failures_text = "; ".join(
+                f"{name} — бот не может начать диалог ({reason})"
+                for name, reason in permanent_failures
+            )
+            response_lines.append("❌ Не удалось отправить: " + failures_text)
+        if transient_failures:
+            failures_text = "; ".join(
+                f"{name} — {reason}" for name, reason in transient_failures
+            )
+            response_lines.append("⚠️ Временно не удалось отправить: " + failures_text)
+        response_lines.append(
+            "Передайте ссылку тем, кто не получил приглашение: "
+            f"{link}. Попросите их открыть бота вручную или перешлите ссылку."
+        )
+
+    if not response_lines:
+        response_lines.append(
+            "❌ Не удалось отправить приглашения. Попробуйте поделиться ссылкой вручную: "
+            + link
+        )
+
+    await message.reply_text("\n".join(response_lines))
 
 
 async def start_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -318,6 +475,7 @@ async def start_button_callback(update: Update, context: ContextTypes.DEFAULT_TY
         return
     state.has_started = True
     await _publish_lobby(update, context, state)
+    await _sync_invite_keyboard(state, context)
     await _send_letter_choice_prompt(state, context)
 
 
@@ -505,15 +663,15 @@ def _format_lobby(state: GameState, *, fresh_start: bool) -> str:
         lines.append('Лобби заполнено — можно сразу жать "Старт".')
     else:
         lines.append("Можно начать игру, как только все готовы.")
-    lines.append("\nИспользуйте кнопки ниже, чтобы пригласить друзей или начать матч.")
+    lines.append(
+        "\nКнопки «Пригласить из контактов» и «Создать ссылку» доступны под полем ввода."
+    )
+    lines.append("Кнопки ниже помогают управлять лобби и запускать игру.")
     return "\n".join(lines)
 
 
 def _build_keyboard(state: GameState) -> Optional[InlineKeyboardMarkup]:
     buttons: List[List[InlineKeyboardButton]] = []
-    buttons.append(
-        [InlineKeyboardButton("📨 Пригласить игроков", callback_data=f"balda:invite:{state.game_id}")]
-    )
     if not state.has_started and len(state.players) >= MIN_PLAYERS:
         buttons.append(
             [InlineKeyboardButton("🚀 Старт", callback_data=f"balda:start:{state.game_id}")]

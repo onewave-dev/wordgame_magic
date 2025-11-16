@@ -53,6 +53,8 @@ class GameState:
     lobby_message_id: Optional[int] = None
     lobby_message_chat_id: Optional[int] = None
     board_message_id: Optional[int] = None
+    invite_keyboard_visible: bool = False
+    invited_users: set[int] = field(default_factory=set)
 
     def reset_timer(self) -> None:
         """Cancel and forget scheduled timer jobs for the current player."""
