@@ -27,7 +27,7 @@ from .lobby import (
     handle_letter_reply,
     handle_name_reply,
     help_cmd,
-    invite_callback,
+    invite_link_request,
     join_cmd,
     letter_choice_callback,
     newgame,
@@ -36,6 +36,7 @@ from .lobby import (
     score_cmd,
     start_button_callback,
     start_cmd,
+    users_shared_handler,
 )
 
 
@@ -83,7 +84,20 @@ def register_handlers(application: Optional[Application]) -> None:
         ),
         group=-1,
     )
-    application.add_handler(CallbackQueryHandler(invite_callback, pattern="^balda:invite:"))
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & (~filters.COMMAND) & filters.Regex("^Создать ссылку$"),
+            invite_link_request,
+            block=False,
+        ),
+        group=-1,
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.StatusUpdate.USERS_SHARED, users_shared_handler, block=False
+        ),
+        group=-1,
+    )
     application.add_handler(CallbackQueryHandler(start_button_callback, pattern="^balda:start:"))
     application.add_handler(CallbackQueryHandler(letter_choice_callback, pattern="^balda:letter:"))
     application.add_handler(CallbackQueryHandler(direction_choice_callback, pattern="^balda:turn:"))
